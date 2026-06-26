@@ -15,6 +15,8 @@ public sealed class CliArgs
     public string? MmIgnoreFile { get; private set; }
     public bool DryRun { get; private set; }
     public bool DevMode { get; private set; }
+    /// <summary>Compression algorithm: null/"none" = off, "lz4" = LZ4 block (HC).</summary>
+    public string? Compress { get; private set; }
 
     public static CliArgs Parse(string[] args)
     {
@@ -51,6 +53,9 @@ public sealed class CliArgs
                 case "--dev":
                     result.DevMode = true;
                     break;
+                case "--compress":
+                    result.Compress = args[++i].Trim().ToLowerInvariant();
+                    break;
                 case "--verbose":
                 case "-v":
                     result.Verbose = true;
@@ -74,6 +79,7 @@ public sealed class CliArgs
           mmencoder encode-dir --source <dir> --output <dir>
                                [--config <path> --project <key>]
                                [--mmignore <file>]
+                               [--compress lz4|none]
                                [--dev]
                                [--dry-run]
                                [--verbose]
@@ -83,6 +89,8 @@ public sealed class CliArgs
                                Schreibt .mmprotect/dev-buildkey.b64 in den Output.
           --config + --project Produktionsmodus: License Server aus Config.
           --mmignore <file>    Globale .mmignore-Datei (gilt vor verzeichnislokalen Dateien).
+          --compress lz4       LZ4-Komprimierung vor AES-256-GCM (spart Speicherplatz bei großem PHP-Code).
+          --compress none      Keine Komprimierung (Standard).
           --dry-run            Nur anzeigen, was passieren würde. Nichts schreiben.
 
         .mmignore-Format (in jedem Quellverzeichnis):

@@ -11,7 +11,8 @@ if test "$PHP_MMLOADER" != "no"; then
     [AC_MSG_ERROR([libcurl not found — install libcurl4-openssl-dev])])
 
   PHP_ADD_INCLUDE($ext_srcdir/vendor/cjson)
+  PHP_ADD_INCLUDE($ext_srcdir/vendor/lz4)
 
-  PHP_NEW_EXTENSION(mmloader, mmloader.c vendor/cjson/cJSON.c, $ext_shared)
+  PHP_NEW_EXTENSION(mmloader, mmloader.c vendor/cjson/cJSON.c vendor/lz4/lz4_decompress.c, $ext_shared)
   PHP_SUBST(MMLOADER_SHARED_LIBADD)
 fi

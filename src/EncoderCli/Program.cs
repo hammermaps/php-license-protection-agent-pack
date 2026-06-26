@@ -74,7 +74,8 @@ try
                 var localEncoder = new LocalDevEncoder();
                 await localEncoder.EncodeAsync(
                     sourceDir, outputDir, mmIgnore, signing,
-                    cli.Verbose, cli.DryRun);
+                    cli.Verbose, cli.DryRun,
+                    compression: cli.Compress);
             }
             else
             {
@@ -89,6 +90,10 @@ try
                 // Merge global .mmignore from CLI flag into config
                 if (cli.MmIgnoreFile != null)
                     config.Defaults.MmIgnoreFile = cli.MmIgnoreFile;
+
+                // --compress CLI flag overrides config value
+                if (cli.Compress != null)
+                    config.Defaults.Compression = cli.Compress;
 
                 var apiKey = config.LicenseServer.ResolveApiKey();
                 using var http = new HttpClient

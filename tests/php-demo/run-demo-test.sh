@@ -2,13 +2,20 @@
 # =============================================================================
 #  MMProtect – Demo-Projekt Testskript
 #  Testet den vollständigen Flow:
-#    1. Klartext-PHP ausführen
-#    2. Verzeichnis mit encode-dir (Dev-Modus) verschlüsseln
-#    3. Einzelne Dateien mit mmloader (dev_buildkey) ausführen
-#    4. OPcache-Modus prüfen
-#    5. Smoke-Test der verschlüsselten Anwendung
-#    6. encode-dir Dry-Run
-#    7. .mmignore Ausschluss prüfen
+#    1.  Klartext-PHP ausführen
+#    2.  Verzeichnis mit encode-dir (Dev-Modus) verschlüsseln
+#    3.  MMENC1-Container-Format prüfen
+#    4.  Verschlüsselte PHP-Dateien mit mmloader ausführen
+#    5.  Smoke-Test der verschlüsselten Anwendung
+#    6.  mmloader mit OPcache
+#    7.  PHP 8.5 (optional)
+#    8.  Dry-Run
+#    9.  .mmignore Ausschluss
+#    10. Klartext-PHP mit aktivem mmloader
+#    11. LZ4-Komprimierung: encode mit --compress lz4
+#    12. LZ4-Komprimierung: Header-Feld prüfen ("compression":"lz4")
+#    13. LZ4-komprimierte Dateien ausführen (Dev-Modus)
+#    14. LZ4 + OPcache
 # =============================================================================
 set -uo pipefail
 
@@ -32,6 +39,24 @@ pass() { echo -e "  ${GREEN}[PASS]${NC} $1"; ((PASS++)); }
 fail() { echo -e "  ${RED}[FAIL]${NC} $1"; ((FAIL++)); }
 skip() { echo -e "  ${YELLOW}[SKIP]${NC} $1"; ((SKIP++)); }
 sep()  { echo ""; echo "── $1 ──────────────────────────────────────────────"; }
+
+# Liest das "compression"-Feld aus einem MMENC1-Header-JSON.
+# Gibt den Feldwert aus oder einen leeren String wenn das Feld fehlt.
+mmenc1_compression() {
+  python3 - "$1" << 'PYEOF'
+import sys, json
+try:
+    with open(sys.argv[1], 'rb') as f:
+        f.read(7)             # MMENC1\n
+        hlen = int(f.read(8)) # 8-digit ASCII decimal header length
+        f.read(1)             # \n
+        h = json.loads(f.read(hlen))
+    print(h.get("compression", ""))
+except Exception as e:
+    print("ERROR:" + str(e), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+}
 
 cleanup() { rm -rf "$OUT_DIR"; }
 trap cleanup EXIT
@@ -290,6 +315,103 @@ if echo "$RESULT" | grep -q "plain ok"; then
   pass "Klartext-PHP läuft unverändert durch mmloader"
 else
   fail "Klartext-PHP fehlgeschlagen: $RESULT"
+fi
+
+# ── Test 11: LZ4-Komprimierung – encode-dir mit --compress lz4 ────────────
+sep "Test 11: LZ4-Komprimierung encode (--compress lz4)"
+
+LZ4_DIR="$OUT_DIR/lz4"
+dotnet "$ENCODER_DLL" encode-dir \
+    --source "$DEMO_DIR" \
+    --output "$LZ4_DIR" \
+    --mmignore "$MMIGNORE" \
+    --dev --compress lz4 2>&1 | grep -E "^(\[DEV\]|Fertig|ERROR)" || true
+
+if [[ -f "$LZ4_DIR/.mmprotect/dev-buildkey.b64" ]]; then
+  pass "LZ4: dev-buildkey.b64 erzeugt"
+else
+  fail "LZ4: dev-buildkey.b64 fehlt"
+fi
+
+if [[ -f "$LZ4_DIR/src/App/Application.php" ]]; then
+  MAGIC=$(head -c 6 "$LZ4_DIR/src/App/Application.php" 2>/dev/null || echo "")
+  if [[ "$MAGIC" == "MMENC1" ]]; then
+    pass "LZ4: MMENC1-Magic vorhanden"
+  else
+    fail "LZ4: Kein MMENC1-Magic (gefunden: '$MAGIC')"
+  fi
+else
+  fail "LZ4: src/App/Application.php fehlt im Output"
+fi
+
+# ── Test 12: LZ4-Header-Feld prüfen ───────────────────────────────────────
+sep "Test 12: LZ4-Komprimierung – Header-Feld \"compression\":\"lz4\""
+
+LZ4_FILE="$LZ4_DIR/src/App/Application.php"
+
+if [[ -f "$LZ4_FILE" ]]; then
+  COMP_FIELD=$(mmenc1_compression "$LZ4_FILE" 2>/dev/null || echo "ERROR")
+  if [[ "$COMP_FIELD" == "lz4" ]]; then
+    pass "LZ4: Header-Feld compression=lz4 korrekt"
+  else
+    fail "LZ4: Header-Feld compression erwartet 'lz4', got '$COMP_FIELD'"
+  fi
+else
+  fail "LZ4: Datei für Header-Prüfung fehlt: $LZ4_FILE"
+fi
+
+# Ohne --compress darf das Feld NICHT gesetzt sein (rückwärtskompatibel)
+COMP_PLAIN=$(mmenc1_compression "$ENCODED_DIR/src/App/Application.php" 2>/dev/null || echo "ERROR")
+if [[ -z "$COMP_PLAIN" ]]; then
+  pass "Ohne --compress: kein compression-Feld im Header (rückwärtskompatibel)"
+else
+  fail "Ohne --compress: unerwartetes compression-Feld='$COMP_PLAIN'"
+fi
+
+# ── Test 13: LZ4-komprimierte Dateien ausführen ───────────────────────────
+sep "Test 13: LZ4-komprimierte Dateien ausführen (PHP 8.4, Dev-Modus)"
+
+LZ4_KEY="$LZ4_DIR/.mmprotect/dev-buildkey.b64"
+
+RESULT=$("$PHP84" \
+    -d "extension=$LOADER_SO" \
+    -d "mmloader.dev_mode=1" \
+    -d "mmloader.dev_buildkey=$LZ4_KEY" \
+    "$LZ4_DIR/public/index.php" 2>&1) || true
+
+if echo "$RESULT" | grep -q "protected project code executed"; then
+  pass "LZ4: PHP 8.4 Ausführung erfolgreich: $RESULT"
+else
+  fail "LZ4: PHP 8.4 Ausführung fehlgeschlagen: $RESULT"
+fi
+
+RESULT=$("$PHP84" \
+    -d "extension=$LOADER_SO" \
+    -d "mmloader.dev_mode=1" \
+    -d "mmloader.dev_buildkey=$LZ4_KEY" \
+    "$LZ4_DIR/tests/smoke.php" 2>&1) || true
+
+if echo "$RESULT" | grep -q "Smoke test ok"; then
+  pass "LZ4: Smoke-Test erfolgreich"
+else
+  fail "LZ4: Smoke-Test fehlgeschlagen: $RESULT"
+fi
+
+# ── Test 14: LZ4 + OPcache ────────────────────────────────────────────────
+sep "Test 14: LZ4-Komprimierung + OPcache (PHP 8.4)"
+
+RESULT=$("$PHP84" \
+    -d "zend_extension=opcache.so" \
+    -d "opcache.enable_cli=1" \
+    -d "extension=$LOADER_SO" \
+    -d "mmloader.dev_mode=1" \
+    -d "mmloader.dev_buildkey=$LZ4_KEY" \
+    "$LZ4_DIR/public/index.php" 2>&1) || true
+
+if echo "$RESULT" | grep -q "protected project code executed"; then
+  pass "LZ4 + OPcache: PHP 8.4 OK"
+else
+  fail "LZ4 + OPcache fehlgeschlagen: $RESULT"
 fi
 
 # ── Ergebnis ───────────────────────────────────────────────────────────────

@@ -1,7 +1,9 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using K4os.Compression.LZ4;
 
 namespace MmProtect.EncoderCli.Encoding;
 
@@ -17,9 +19,27 @@ public sealed class MmencContainer
     ///   Week 4: path to ECDSA-P256 PEM private key for header signing.
     ///   Null = fall back to SHA-256 demo hash (loader accepts both).
     /// </param>
+    /// <summary>
+    /// Compress <paramref name="data"/> with LZ4-HC block format.
+    /// Returns a buffer: [4-byte LE original size][LZ4 block data].
+    /// </summary>
+    public static byte[] CompressLz4Block(byte[] data)
+    {
+        int origSize = data.Length;
+        int maxOut = LZ4Codec.MaximumOutputSize(origSize);
+        byte[] buf = new byte[4 + maxOut];
+        BinaryPrimitives.WriteInt32LittleEndian(buf, origSize);
+        int compressedLen = LZ4Codec.Encode(data, 0, origSize, buf, 4, maxOut, LZ4Level.L09_HC);
+        return buf[..(4 + compressedLen)];
+    }
+
     public static MmencContainer Create(byte[] plain, byte[] fileKey, MmencHeader header,
                                          string? signingKeyFile = null)
     {
+        // Compress before encryption when requested
+        if (header.Compression == "lz4")
+            plain = CompressLz4Block(plain);
+
         var nonce = RandomNumberGenerator.GetBytes(12);
         var tag = new byte[16];
         var cipher = new byte[plain.Length];
@@ -84,6 +104,9 @@ public sealed class MmencHeader
     public string PlainHash { get; set; } = "";
     public string CipherHash { get; set; } = "";
     public string Algorithm { get; set; } = "AES-256-GCM";
+    /// <summary>Optional compression before encryption. Null/absent = no compression. "lz4" = LZ4 block.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Compression { get; set; }
     public string Kdf { get; set; } = "HKDF-SHA256";
     public string KeyId { get; set; } = "";
     public string Nonce { get; set; } = "";

@@ -18,7 +18,8 @@ public sealed class LocalDevEncoder
         MmIgnoreRuleSet mmIgnore,
         SigningOptions? signing,
         bool verbose,
-        bool dryRun)
+        bool dryRun,
+        string? compression = null)
     {
         sourceRoot = Path.GetFullPath(sourceRoot);
         outputRoot = Path.GetFullPath(outputRoot);
@@ -90,6 +91,8 @@ public sealed class LocalDevEncoder
                     PathHash = pathHash,
                     PlainHash = plainHash,
                     Algorithm = "AES-256-GCM",
+                    Compression = string.IsNullOrWhiteSpace(compression) || compression == "none"
+                        ? null : compression,
                     Kdf = "HKDF-SHA256",
                     KeyId = keyId,
                     ManifestHash = "pending",

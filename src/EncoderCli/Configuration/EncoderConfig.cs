@@ -56,6 +56,13 @@ public sealed class DefaultOptions
     public SigningOptions? Signing { get; set; }
 
     /// <summary>
+    /// Optional compression applied to PHP plaintext before AES-256-GCM encryption.
+    /// Supported values: null/"none" (no compression, default) or "lz4" (LZ4 block, high compression).
+    /// Reduces file size for text-heavy PHP code. Transparent to the loader (field stored in MMENC1 header).
+    /// </summary>
+    public string? Compression { get; set; }
+
+    /// <summary>
     /// Optional path to a global .mmignore file applied before any directory-local .mmignore files.
     /// Useful to enforce project-wide exclusions independently of the source tree.
     /// </summary>

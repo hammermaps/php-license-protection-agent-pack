@@ -28,6 +28,7 @@
 #include <limits.h>
 
 #include "vendor/cjson/cJSON.h"
+#include "vendor/lz4/lz4_decompress.h"
 
 /* ZEND_EXT_API is not defined by the PHP Linux headers but is required by
  * zend_extensions.h for the zend_extension_entry symbol export declaration.
@@ -989,13 +990,14 @@ static void mmloader_execute_ex_hook(zend_execute_data *execute_data)
 
 static zend_string *mmloader_decrypt_from_fp(FILE *fp, const char *filename)
 {
-    zend_string  *result      = NULL;
-    char         *header_json = NULL;
-    unsigned char *ciphertext = NULL;
-    unsigned char *plaintext  = NULL;
-    cJSON        *root        = NULL;
-    char         *info        = NULL;
-    size_t        ct_len      = 0;
+    zend_string  *result           = NULL;
+    char         *header_json      = NULL;
+    unsigned char *ciphertext      = NULL;
+    unsigned char *plaintext       = NULL;
+    size_t        plain_alloc_len  = 0; /* tracks current plaintext buffer size for secure zero */
+    cJSON        *root             = NULL;
+    char         *info             = NULL;
+    size_t        ct_len           = 0;
 
     char len_buf[9];
     if (fread(len_buf, 1, 9, fp) != 9 || len_buf[8] != '\n') {
@@ -1048,6 +1050,9 @@ static zend_string *mmloader_decrypt_from_fp(FILE *fp, const char *filename)
     cJSON *j_nonce    = cJSON_GetObjectItemCaseSensitive(root, "nonce");
     cJSON *j_tag      = cJSON_GetObjectItemCaseSensitive(root, "tag");
     cJSON *j_algo     = cJSON_GetObjectItemCaseSensitive(root, "algorithm");
+    cJSON *j_comp     = cJSON_GetObjectItemCaseSensitive(root, "compression");
+    int    use_lz4    = (cJSON_IsString(j_comp) &&
+                         strcmp(j_comp->valuestring, "lz4") == 0) ? 1 : 0;
 
     if (!cJSON_IsString(j_buildId)  || !cJSON_IsString(j_fileId) ||
         !cJSON_IsString(j_pathHash) || !cJSON_IsString(j_nonce)  ||
@@ -1101,6 +1106,7 @@ static zend_string *mmloader_decrypt_from_fp(FILE *fp, const char *filename)
     }
 
     plaintext = emalloc(ct_len);
+    plain_alloc_len = ct_len;
     size_t pt_len = 0;
     int dec_ok = mmloader_aes256gcm_decrypt(
         file_key, nonce, 12, ciphertext, ct_len, tag, 16, plaintext, &pt_len);
@@ -1115,20 +1121,57 @@ static zend_string *mmloader_decrypt_from_fp(FILE *fp, const char *filename)
         php_error_docref(NULL, E_WARNING,
             "MMENC: AES-GCM authentication failed for %s "
             "(wrong key or corrupted file)", filename);
-        if (plaintext) ZEND_SECURE_ZERO(plaintext, ct_len);
         goto cleanup;
     }
 
+    if (use_lz4) {
+        /* Decompress LZ4 block: plaintext = [4-byte LE orig_size][LZ4 block data] */
+        if (pt_len < 4) {
+            php_error_docref(NULL, E_WARNING,
+                "MMENC: LZ4 payload too short in %s", filename);
+            goto cleanup;
+        }
+        int32_t orig_size;
+        memcpy(&orig_size, plaintext, 4);
+        if (orig_size <= 0 || orig_size > 64 * 1024 * 1024) {
+            php_error_docref(NULL, E_WARNING,
+                "MMENC: invalid LZ4 decompressed size %d in %s", orig_size, filename);
+            goto cleanup;
+        }
+        unsigned char *decompressed = emalloc((size_t)orig_size + 1);
+        int lz4_result = LZ4_decompress_safe(
+            (const char *)plaintext + 4,
+            (char *)decompressed,
+            (int)(pt_len - 4),
+            orig_size);
+        ZEND_SECURE_ZERO(plaintext, plain_alloc_len);
+        efree(plaintext);
+        plaintext = NULL;
+        plain_alloc_len = 0;
+        if (lz4_result != orig_size) {
+            php_error_docref(NULL, E_WARNING,
+                "MMENC: LZ4 decompression failed in %s (got %d, expected %d)",
+                filename, lz4_result, orig_size);
+            ZEND_SECURE_ZERO(decompressed, (size_t)orig_size);
+            efree(decompressed);
+            goto cleanup;
+        }
+        plaintext = decompressed;
+        plain_alloc_len = (size_t)orig_size;
+        pt_len = (size_t)orig_size;
+    }
+
     result = zend_string_init((const char *)plaintext, pt_len, 0);
-    ZEND_SECURE_ZERO(plaintext, ct_len);
+    ZEND_SECURE_ZERO(plaintext, plain_alloc_len);
     efree(plaintext); plaintext = NULL;
+    plain_alloc_len = 0;
 
 cleanup:
     if (fp)          fclose(fp);
     if (info)        efree(info);
     if (header_json) efree(header_json);
-    if (ciphertext)  { ZEND_SECURE_ZERO(ciphertext, ct_len); efree(ciphertext); }
-    if (plaintext)   { ZEND_SECURE_ZERO(plaintext,  ct_len); efree(plaintext); }
+    if (ciphertext)  { ZEND_SECURE_ZERO(ciphertext, ct_len);         efree(ciphertext); }
+    if (plaintext)   { ZEND_SECURE_ZERO(plaintext,  plain_alloc_len); efree(plaintext); }
     if (root)        cJSON_Delete(root);
     return result;
 }

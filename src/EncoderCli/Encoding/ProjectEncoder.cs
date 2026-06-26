@@ -130,6 +130,8 @@ public sealed class ProjectEncoder
                     PathHash = pathHash,
                     PlainHash = plainHash,
                     Algorithm = config.Defaults.Algorithm,
+                    Compression = string.IsNullOrWhiteSpace(config.Defaults.Compression) || config.Defaults.Compression == "none"
+                        ? null : config.Defaults.Compression,
                     Kdf = "HKDF-SHA256",
                     KeyId = build.KeyId,
                     ManifestHash = "pending",

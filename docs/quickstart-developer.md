@@ -16,6 +16,7 @@ sudo apt-get install -y \
     libssl-dev libcurl4-openssl-dev \
     dotnet-sdk-8.0 \
     sqlite3 curl git openssl composer
+# Hinweis: LZ4 ist als Vendor-Bibliothek eingebettet — kein liblz4-dev nötig.
 
 # Optional: PHP 8.5-Unterstützung
 sudo apt-get install -y php8.5-dev php8.5-cli php8.5-opcache
@@ -267,6 +268,17 @@ rm -rf /tmp/mm_encoded_demo /tmp/mmloader_cache
 ---
 
 ## Tipps für den Entwicklungsalltag
+
+**LZ4-Komprimierung aktivieren** (spart 40–60 % bei großem PHP-Code):
+```bash
+# Via CLI-Flag (Dev-Mode):
+dotnet artifacts/encoder/linux-x64/mmencoder.dll encode-dir \
+    --source tests/php-demo --output /tmp/encoded --dev --compress lz4
+
+# Via Config (Produktion):
+# "defaults": { "compression": "lz4", ... }
+```
+Der Loader erkennt das Feld `"compression": "lz4"` im MMENC1-Header automatisch und dekomprimiert transparent. Klartext-Dateien ohne Komprimierung funktionieren unverändert (rückwärtskompatibel).
 
 **Nur neu geänderte Dateien neu verschlüsseln:** Derzeit verschlüsselt der Encoder immer alle Dateien neu. Builds sind idempotent (neuer `buildId` pro Lauf). Für schnelle Iterationen Dev-Mode nutzen.
 
