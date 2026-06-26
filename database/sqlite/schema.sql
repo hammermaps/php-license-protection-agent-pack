@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS licenses (
   valid_until      TEXT,
   max_activations  INTEGER NOT NULL DEFAULT 1,
   features         TEXT,
+  constraints      TEXT,
   status           TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','expired','revoked')),
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );

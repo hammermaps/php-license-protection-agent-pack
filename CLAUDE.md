@@ -333,7 +333,7 @@ Key routing rules:
 
 | Datei | Inhalt |
 |---|---|
-| `Program.cs` | 8 Encoder- + 7 Admin-REST-Endpunkte; Revocation; Audit-Log; validFrom-Check; AuditService-DI; Startup-Warnings |
+| `Program.cs` | 8 Encoder- + 7 Admin- + 4 Sollte-REST-Endpunkte; Revocation; Audit-Log; validFrom-Check; AuditService-DI; Startup-Warnings; Constraints-Prüfung; Feature-Gates; Correlation-ID; Stats; API-Client-CRUD |
 | `Models/Contracts.cs` | Alle Request/Response-Records inkl. Admin-DTOs |
 | `Security/ApiKeyValidator.cs` | Bearer-Token-Prüfung für Encoder- und Admin-Keys; `AdminApiKeyEndpointFilter` |
 | `Security/CryptoService.cs` | AES-256-GCM Build-Key-Verschlüsselung (`Security:KeyEncryptionKey`); ECDSA-P256-Signaturen (`Security:SigningPrivateKeyFile`); HMAC-SHA256-Fallback mit Startup-Warning |
@@ -361,6 +361,10 @@ Key routing rules:
 - `POST /api/v1/admin/activations/{activationUid}/revoke` ✓
 - `DELETE /api/v1/admin/activations/{activationUid}` ✓
 - `GET /api/v1/admin/audit-log` ✓
+- `GET /api/v1/admin/stats` ✓
+- `GET /api/v1/admin/api-clients` ✓
+- `POST /api/v1/admin/api-clients` ✓
+- `DELETE /api/v1/admin/api-clients/{clientUid}` ✓
 
 **Datenbankunterstützung:**
 - MySQL (Produktion): `"DatabaseProvider": "mysql"` in `appsettings.json`
@@ -451,6 +455,7 @@ scripts/linux/gen-signing-keys.sh /etc/mmprotect/
 | manifest.json + license.json lesen | ✓ |
 | Machine Fingerprint (`/etc/machine-id` + hostname, SHA-256) | ✓ |
 | HTTPS Runtime-Lease-Request (libcurl) | ✓ |
+| Hostname im Lease-Request (`gethostname`) | ✓ |
 | Lease-Signatur verifizieren (ECDSA-P256) | ✓ |
 | HKDF-SHA256 per-Datei-Key ableiten | ✓ |
 | AES-256-GCM entschlüsseln (OpenSSL EVP) | ✓ |
@@ -462,6 +467,8 @@ scripts/linux/gen-signing-keys.sh /etc/mmprotect/
 | `op_array` als geschützt markieren | ✓ |
 | `execute_ex`-Hook / OPcache-Guard | ✓ |
 | Dev-Mode (Buildkey aus Datei, kein Server) | ✓ |
+| Dev-Mode E_WARNING (einmalig pro Prozess) | ✓ |
+| Feature-Gates: `lease_features` HashTable + `mmprotect_has_feature()` | ✓ |
 | INI-Parameter (enabled, license_server, cache_dir, timeouts, …) | ✓ |
 
 **Build:**
@@ -512,9 +519,10 @@ scripts/linux/build-decoder-php85.sh
 
 | Komponente | Reifegrad | Offene Punkte für Produktion |
 |---|---|---|
-| License Server | Produktionsbereit (Krypto konfigurierbar) | `Security:KeyEncryptionKey` + `SigningPrivateKeyFile` setzen; Canonical-JSON |
+| License Server | Produktionsbereit | `Security:KeyEncryptionKey` + `SigningPrivateKeyFile` setzen; Canonical-JSON |
 | Encoder CLI | Vollständig lauffähig | ManifestHash-Update nach Encoding-Durchlauf |
-| PHP Decoder/Loader | Vollständig implementiert | dev_mode-Warnung (E_WARNING, einmalig) |
+| PHP Decoder/Loader | Vollständig implementiert | – |
+| Docker / Compose | `Dockerfile` + `docker-compose.yml` vorhanden | Signing-Key als Secret mounten |
 | LicenseServer.Tests | 13/13 (inkl. 8 Security-Tests) | – |
 | EncoderCli.Tests | 40/40 (Glob + MmIgnore + Compression) | – |
 | E2E-Integrationstest | 7/7 (PHP 8.5 skip) | PHP 8.5: `sudo apt install php8.5-dev` + build |

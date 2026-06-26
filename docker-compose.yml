@@ -1,0 +1,59 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: mm-license-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: mm_license
+      MYSQL_USER: mm_license
+      MYSQL_PASSWORD: change-me-db-password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mm_license_mysql:/var/lib/mysql
+      - ./database/mysql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "mm_license", "-pchange-me-db-password"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  license-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mm-license-server
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      # Database
+      DatabaseProvider: mysql
+      ConnectionStrings__MySql: "Server=mysql;Port=3306;Database=mm_license;User Id=mm_license;Password=change-me-db-password;AllowPublicKeyRetrieval=true;SslMode=Preferred;"
+      # API keys — change these before deploying
+      Security__EncoderApiKeys__0: "change-me-encoder-api-key"
+      Security__AdminApiKeys__0: "change-me-admin-api-key"
+      # Build-key encryption: generate with: openssl rand -hex 32
+      Security__KeyEncryptionKey: ""
+      # ECDSA-P256 signing key — mount the file and set path:
+      # Security__SigningPrivateKeyFile: "/run/secrets/signing-private.pem"
+      # Lease TTL
+      Lease__TtlMinutes: "60"
+      Lease__GraceMinutes: "1440"
+      # Reverse proxy (set if behind nginx/traefik)
+      ReverseProxy__Enabled: "false"
+      # Rate limiting
+      RateLimiting__LeasePerIpPerMinute: "20"
+      ASPNETCORE_ENVIRONMENT: Production
+    volumes:
+      # Optional: mount signing key
+      # - /etc/mmprotect/signing-private.pem:/run/secrets/signing-private.pem:ro
+      - mm_license_cache:/tmp/mmprotect-cache
+
+volumes:
+  mm_license_mysql:
+  mm_license_cache:

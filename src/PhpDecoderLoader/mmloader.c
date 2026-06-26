@@ -70,6 +70,8 @@ ZEND_BEGIN_MODULE_GLOBALS(mmloader)
     zend_bool  require_signature;
     zend_bool  dev_mode;
     zend_bool  dev_mode_warned;
+    /* Per-process feature set from last successful lease response */
+    HashTable *lease_features;  /* persistent; NULL = no features */
     /* Per-process lease cache (in-RAM) */
     unsigned char cached_runtime_key[32];
     zend_bool     has_cached_key;
@@ -150,6 +152,7 @@ static void php_mmloader_init_globals(zend_mmloader_globals *g)
     g->require_signature    = 1;
     g->dev_mode             = 0;
     g->dev_mode_warned      = 0;
+    g->lease_features       = NULL;
     memset(g->cached_runtime_key, 0, sizeof(g->cached_runtime_key));
     g->has_cached_key         = 0;
     g->cached_lease_expires   = 0;
@@ -733,6 +736,27 @@ static int mmloader_post_lease(const char *body, const char *build_id,
     if (MMLOADER_G(cached_build_id))  free(MMLOADER_G(cached_build_id));
     MMLOADER_G(cached_build_id) = build_id ? strdup(build_id) : NULL;
 
+    /* Extract feature set from lease response and store persistently */
+    cJSON *j_features = cJSON_GetObjectItemCaseSensitive(json, "features");
+    if (cJSON_IsArray(j_features)) {
+        if (MMLOADER_G(lease_features)) {
+            zend_hash_destroy(MMLOADER_G(lease_features));
+            pefree(MMLOADER_G(lease_features), 1);
+        }
+        MMLOADER_G(lease_features) = (HashTable *)pemalloc(sizeof(HashTable), 1);
+        zend_hash_init(MMLOADER_G(lease_features),
+                       (uint32_t)cJSON_GetArraySize(j_features), NULL, NULL, 1);
+        cJSON *item;
+        cJSON_ArrayForEach(item, j_features) {
+            if (cJSON_IsString(item) && item->valuestring) {
+                zend_hash_str_add_empty_element(
+                    MMLOADER_G(lease_features),
+                    item->valuestring,
+                    strlen(item->valuestring));
+            }
+        }
+    }
+
     mmloader_cache_write(build_id, key_out, expires_at, grace_until);
 
     cJSON_Delete(json);
@@ -804,6 +828,11 @@ static int mmloader_fetch_lease(const char *build_id, unsigned char *key_out,
     cJSON_AddStringToObject(req, "phpVersion",         PHP_VERSION);
     cJSON_AddStringToObject(req, "sapi",               sapi_module.name ? sapi_module.name : "cli");
     cJSON_AddStringToObject(req, "nonce",              nonce);
+    {
+        char req_hostname[256] = {0};
+        gethostname(req_hostname, sizeof(req_hostname) - 1);
+        cJSON_AddStringToObject(req, "hostname", req_hostname);
+    }
     body = cJSON_PrintUnformatted(req);
     cJSON_Delete(req);
     if (!body) goto done;
@@ -1343,6 +1372,12 @@ PHP_MSHUTDOWN_FUNCTION(mmloader)
         MMLOADER_G(file_magic_cache) = NULL;
     }
 
+    if (MMLOADER_G(lease_features)) {
+        zend_hash_destroy(MMLOADER_G(lease_features));
+        pefree(MMLOADER_G(lease_features), 1);
+        MMLOADER_G(lease_features) = NULL;
+    }
+
     if (s_signing_public_key) {
         EVP_PKEY_free(s_signing_public_key);
         s_signing_public_key = NULL;
@@ -1406,10 +1441,38 @@ PHP_MINFO_FUNCTION(mmloader)
     DISPLAY_INI_ENTRIES();
 }
 
+/* ====================================================================
+ * PHP userland function: mmprotect_has_feature(string $feature): bool
+ *
+ * Returns true when the current lease grants the named feature.
+ * Returns false when the extension is disabled, no lease is active,
+ * or the feature is not in the lease's feature list.
+ * ==================================================================== */
+
+PHP_FUNCTION(mmprotect_has_feature)
+{
+    char   *feature;
+    size_t  feature_len;
+
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STRING(feature, feature_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (!MMLOADER_G(lease_features) || feature_len == 0) {
+        RETURN_FALSE;
+    }
+    RETURN_BOOL(zend_hash_str_exists(MMLOADER_G(lease_features), feature, feature_len));
+}
+
+static const zend_function_entry mmloader_functions[] = {
+    PHP_FE(mmprotect_has_feature, NULL)
+    PHP_FE_END
+};
+
 zend_module_entry mmloader_module_entry = {
     STANDARD_MODULE_HEADER,
     "mmloader",
-    NULL,
+    mmloader_functions,
     PHP_MINIT(mmloader),
     PHP_MSHUTDOWN(mmloader),
     PHP_RINIT(mmloader),

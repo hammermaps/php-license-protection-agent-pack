@@ -15,7 +15,13 @@ public sealed record LicenseUpsertRequest(
     DateTimeOffset ValidFrom,
     DateTimeOffset? ValidUntil,
     int MaxActivations,
-    string[]? Features);
+    string[]? Features,
+    LicenseConstraints? Constraints = null);
+
+public sealed record LicenseConstraints(
+    string[]? AllowedHostnames = null,
+    string[]? AllowedDomains = null,
+    string[]? AllowedIps = null);
 
 public sealed record LicenseUpsertResponse(string LicenseId, bool Created);
 
@@ -55,7 +61,10 @@ public sealed record RuntimeLeaseRequest(
     string LoaderVersion,
     string PhpVersion,
     string Sapi,
-    string Nonce);
+    string Nonce,
+    string? Hostname = null,
+    string? Domain = null,
+    string? PublicIp = null);
 
 public sealed record RuntimeLeaseResponse(
     string Format,
@@ -69,7 +78,8 @@ public sealed record RuntimeLeaseResponse(
     DateTimeOffset IssuedAt,
     DateTimeOffset ExpiresAt,
     DateTimeOffset GraceUntil,
-    string Signature);
+    string Signature,
+    string[]? Features = null);
 
 /* ── Admin API ───────────────────────────────────────────────────────────── */
 
@@ -104,3 +114,35 @@ public sealed record AdminAuditEventDto(
     string? IpAddress,
     string? Details,
     DateTime CreatedAt);
+
+/* ── API-Client Management ───────────────────────────────────────────────── */
+
+public sealed record ApiClientCreateRequest(string Name, string Scope);
+
+public sealed record ApiClientCreateResponse(
+    string ClientUid,
+    string ApiKey,
+    string Name,
+    string Scope,
+    DateTime CreatedAt);
+
+public sealed record ApiClientDto(
+    string ClientUid,
+    string Name,
+    string Scope,
+    bool IsActive,
+    DateTime CreatedAt);
+
+/* ── Monitoring ──────────────────────────────────────────────────────────── */
+
+public sealed record StatsDto(
+    LicenseStatsDto Licenses,
+    BuildStatsDto Builds,
+    ActivationStatsDto Activations,
+    LeaseStatsDto Leases,
+    string Database);
+
+public sealed record LicenseStatsDto(int Total, int Active, int Revoked, int Suspended);
+public sealed record BuildStatsDto(int Total, int Signed, int Revoked);
+public sealed record ActivationStatsDto(int Total, int Active, int Revoked);
+public sealed record LeaseStatsDto(int Issued24h);

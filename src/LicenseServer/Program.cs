@@ -6,6 +6,7 @@ using MmProtect.LicenseServer.Models;
 using MmProtect.LicenseServer.Security;
 using System.Net;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 
 // Register Dapper DateTime handler so SQLite TEXT dates map to DateTime correctly.
@@ -139,12 +140,35 @@ if (proxyEnabled)
 
 app.UseRateLimiter();
 
-app.MapGet("/health", () => Results.Ok(new
+/* ── Correlation ID ─────────────────────────────────────────────────────── */
+app.Use(async (ctx, next) =>
 {
-    status = "ok",
-    version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "dev",
-    timeUtc = DateTimeOffset.UtcNow
-}));
+    var requestId = ctx.Request.Headers["X-Request-ID"].FirstOrDefault()
+                    ?? ctx.TraceIdentifier;
+    ctx.Response.Headers["X-Request-ID"] = requestId;
+    await next(ctx);
+});
+
+app.MapGet("/health", async (IDbConnectionFactory db) =>
+{
+    string dbStatus;
+    try
+    {
+        await using var conn = await db.OpenAsync();
+        await conn.ExecuteScalarAsync<int>("SELECT 1");
+        dbStatus = "ok";
+    }
+    catch { dbStatus = "error"; }
+
+    var payload = new
+    {
+        status   = dbStatus == "ok" ? "ok" : "degraded",
+        version  = typeof(Program).Assembly.GetName().Version?.ToString() ?? "dev",
+        timeUtc  = DateTimeOffset.UtcNow,
+        database = dbStatus
+    };
+    return dbStatus == "ok" ? Results.Ok(payload) : Results.Json(payload, statusCode: 503);
+});
 
 var encoder = app.MapGroup("/api/v1/encoder");
 encoder.AddEndpointFilter<ApiKeyEndpointFilter>();
@@ -216,22 +240,25 @@ encoder.MapPost("/licenses/upsert", async (LicenseUpsertRequest request, IDbConn
     var upsertSql = db.IsSqlite
         ? """
           INSERT INTO licenses
-              (license_uid, customer_id, project_id, license_key, valid_from, valid_until, max_activations, features, status)
+              (license_uid, customer_id, project_id, license_key, valid_from, valid_until, max_activations, features, constraints, status)
           VALUES
-              (@Uid, @CustomerDbId, @ProjectDbId, @LicenseKey, @ValidFrom, @ValidUntil, @MaxActivations, @FeaturesJson, 'active')
+              (@Uid, @CustomerDbId, @ProjectDbId, @LicenseKey, @ValidFrom, @ValidUntil, @MaxActivations, @FeaturesJson, @ConstraintsJson, 'active')
           ON CONFLICT(license_key) DO UPDATE SET
               valid_from = excluded.valid_from, valid_until = excluded.valid_until,
-              max_activations = excluded.max_activations, features = excluded.features;
+              max_activations = excluded.max_activations, features = excluded.features, constraints = excluded.constraints;
           """
         : """
           INSERT INTO licenses
-              (license_uid, customer_id, project_id, license_key, valid_from, valid_until, max_activations, features, status)
+              (license_uid, customer_id, project_id, license_key, valid_from, valid_until, max_activations, features, constraints, status)
           VALUES
-              (@Uid, @CustomerDbId, @ProjectDbId, @LicenseKey, @ValidFrom, @ValidUntil, @MaxActivations, @FeaturesJson, 'active')
+              (@Uid, @CustomerDbId, @ProjectDbId, @LicenseKey, @ValidFrom, @ValidUntil, @MaxActivations, @FeaturesJson, @ConstraintsJson, 'active')
           ON DUPLICATE KEY UPDATE
               valid_from = VALUES(valid_from), valid_until = VALUES(valid_until),
-              max_activations = VALUES(max_activations), features = VALUES(features), updated_at = CURRENT_TIMESTAMP;
+              max_activations = VALUES(max_activations), features = VALUES(features), constraints = VALUES(constraints), updated_at = CURRENT_TIMESTAMP;
           """;
+
+    var constraintsJson = request.Constraints is null ? null
+        : JsonSerializer.Serialize(request.Constraints, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
 
     await conn.ExecuteAsync(upsertSql, new
     {
@@ -242,7 +269,8 @@ encoder.MapPost("/licenses/upsert", async (LicenseUpsertRequest request, IDbConn
         ValidFrom = request.ValidFrom.UtcDateTime,
         ValidUntil = request.ValidUntil?.UtcDateTime,
         request.MaxActivations,
-        FeaturesJson = JsonCanonical.Serialize(request.Features ?? [])
+        FeaturesJson = JsonCanonical.Serialize(request.Features ?? []),
+        ConstraintsJson = constraintsJson
     });
 
     var licenseUid = await conn.ExecuteScalarAsync<string>(
@@ -389,7 +417,9 @@ app.MapPost("/api/v1/runtime/lease", async (
             l.status           AS LicenseStatus,
             l.valid_from       AS ValidFrom,
             l.valid_until      AS ValidUntil,
-            l.max_activations  AS MaxActivations
+            l.max_activations  AS MaxActivations,
+            l.features         AS FeaturesJson,
+            l.constraints      AS ConstraintsJson
         FROM licenses l
         JOIN builds b ON b.license_id = l.id
         JOIN crypto_keys k ON b.key_id = k.id
@@ -450,6 +480,41 @@ app.MapPost("/api/v1/runtime/lease", async (
         await audit.LogAsync("loader", "lease_denied", "license", row.LicenseUid, clientIp,
             new { reason = "LICENSE_NOT_YET_VALID" });
         return Results.BadRequest(ErrorDto.Create("LICENSE_NOT_YET_VALID", "License is not yet valid."));
+    }
+
+    /* License constraints: hostname / IP binding (only validated when sent by loader) */
+    if (!string.IsNullOrEmpty(row.ConstraintsJson))
+    {
+        try
+        {
+            var constraints = JsonSerializer.Deserialize<LicenseConstraints>(
+                row.ConstraintsJson,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (constraints?.AllowedHostnames?.Length > 0 && !string.IsNullOrEmpty(request.Hostname))
+            {
+                if (!constraints.AllowedHostnames.Any(h =>
+                    string.Equals(h.TrimStart('*', '.'), request.Hostname, StringComparison.OrdinalIgnoreCase) ||
+                    (h.StartsWith("*.") && request.Hostname.EndsWith(h[1..], StringComparison.OrdinalIgnoreCase))))
+                {
+                    await audit.LogAsync("loader", "lease_denied", "license", row.LicenseUid, clientIp,
+                        new { reason = "HOSTNAME_NOT_ALLOWED", hostname = request.Hostname });
+                    return Results.BadRequest(ErrorDto.Create("LEASE_DENIED", "Hostname not permitted by license."));
+                }
+            }
+
+            if (constraints?.AllowedIps?.Length > 0 && !string.IsNullOrEmpty(request.PublicIp))
+            {
+                if (!constraints.AllowedIps.Any(ip =>
+                    string.Equals(ip, request.PublicIp, StringComparison.OrdinalIgnoreCase)))
+                {
+                    await audit.LogAsync("loader", "lease_denied", "license", row.LicenseUid, clientIp,
+                        new { reason = "IP_NOT_ALLOWED", publicIp = request.PublicIp });
+                    return Results.BadRequest(ErrorDto.Create("LEASE_DENIED", "IP address not permitted by license."));
+                }
+            }
+        }
+        catch { /* malformed constraints JSON — skip */ }
     }
 
     /* Check activation limit: count BEFORE upsert, excluding this machine (re-activations always allowed) */
@@ -520,7 +585,8 @@ app.MapPost("/api/v1/runtime/lease", async (
     });
 
     var runtimeKey = crypto.UnprotectBuildKey(row.EncryptedSecretKey);
-    var signature = crypto.SignLease($"{leaseUid}:{request.BuildId}:{request.MachineFingerprint}:{expiresAt:O}");
+    var signature  = crypto.SignLease($"{leaseUid}:{request.BuildId}:{request.MachineFingerprint}:{expiresAt:O}");
+    var features   = ParseFeaturesJson(row.FeaturesJson);
 
     await audit.LogAsync("loader", "lease_granted", "license", row.LicenseUid, clientIp,
         new { leaseId = leaseUid, buildId = request.BuildId });
@@ -537,8 +603,16 @@ app.MapPost("/api/v1/runtime/lease", async (
         issuedAt,
         expiresAt,
         graceUntil,
-        signature));
+        signature,
+        features));
 }).RequireRateLimiting(RateLimitPolicyLease);
+
+static string[]? ParseFeaturesJson(string? json)
+{
+    if (string.IsNullOrEmpty(json)) return null;
+    try { return JsonSerializer.Deserialize<string[]>(json); }
+    catch { return null; }
+}
 
 /* ── Admin API ───────────────────────────────────────────────────────────── */
 
@@ -715,6 +789,107 @@ adminApi.MapDelete("/activations/{activationUid}", async (
     return Results.Ok(new AdminRevokeResponse(true, $"Activation {activationUid} reset."));
 });
 
+/* Stats / monitoring */
+adminApi.MapGet("/stats", async (IDbConnectionFactory db) =>
+{
+    await using var conn = await db.OpenAsync();
+
+    var licTotal     = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM licenses");
+    var licActive    = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM licenses WHERE status = 'active'");
+    var licRevoked   = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM licenses WHERE status = 'revoked'");
+    var licSuspended = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM licenses WHERE status = 'suspended'");
+
+    var buildTotal  = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM builds");
+    var buildSigned = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM builds WHERE status = 'signed'");
+    var buildRev    = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM builds WHERE status = 'revoked'");
+
+    var actTotal   = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM license_activations");
+    var actActive  = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM license_activations WHERE status = 'active'");
+    var actRevoked = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM license_activations WHERE status = 'revoked'");
+
+    var leases24h = await conn.ExecuteScalarAsync<int>(
+        "SELECT COUNT(*) FROM runtime_leases WHERE issued_at >= @Since",
+        new { Since = DateTime.UtcNow.AddHours(-24).ToString("yyyy-MM-dd HH:mm:ss") });
+
+    return Results.Ok(new StatsDto(
+        new LicenseStatsDto(licTotal, licActive, licRevoked, licSuspended),
+        new BuildStatsDto(buildTotal, buildSigned, buildRev),
+        new ActivationStatsDto(actTotal, actActive, actRevoked),
+        new LeaseStatsDto(leases24h),
+        "ok"));
+});
+
+/* List API clients (keys are never exposed here) */
+adminApi.MapGet("/api-clients", async (IDbConnectionFactory db) =>
+{
+    await using var conn = await db.OpenAsync();
+    var rows = await conn.QueryAsync<ApiClientRow>("""
+        SELECT client_uid AS ClientUid, name AS Name, scopes AS Scope,
+               is_active AS IsActive, created_at AS CreatedAt
+        FROM api_clients
+        ORDER BY created_at DESC
+        LIMIT 200
+        """);
+
+    var result = rows.Select(r => new ApiClientDto(
+        r.ClientUid, r.Name, r.Scope ?? "", r.IsActive == 1, r.CreatedAt)).ToList();
+
+    return Results.Ok(new { clients = result });
+});
+
+/* Create a new API client — raw key is returned ONCE, never stored */
+adminApi.MapPost("/api-clients", async (
+    ApiClientCreateRequest request,
+    IDbConnectionFactory db,
+    AuditService audit,
+    HttpContext httpContext) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Name))
+        return Results.BadRequest(ErrorDto.Create("VALIDATION_FAILED", "Name is required."));
+
+    var scope = request.Scope is "encoder" or "admin" or "all" ? request.Scope : "encoder";
+    var uid   = "client_" + Ids.NewId();
+    var rawKey = "mm_" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+                                  .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+    var keyHash = ApiKeyValidator.ComputeKeyHash(rawKey);
+
+    await using var conn = await db.OpenAsync();
+    await conn.ExecuteAsync("""
+        INSERT INTO api_clients (client_uid, name, api_key_hash, scopes, is_active)
+        VALUES (@ClientUid, @Name, @KeyHash, @Scope, 1)
+        """, new { ClientUid = uid, request.Name, KeyHash = keyHash, Scope = scope });
+
+    await audit.LogAsync("admin", "api_client_created", "api_client", uid,
+        httpContext.Connection.RemoteIpAddress?.ToString(),
+        new { name = request.Name, scope });
+
+    return Results.Ok(new ApiClientCreateResponse(uid, rawKey, request.Name, scope, DateTime.UtcNow));
+});
+
+/* Revoke (soft-delete) an API client */
+adminApi.MapDelete("/api-clients/{clientUid}", async (
+    string clientUid,
+    IDbConnectionFactory db,
+    AuditService audit,
+    HttpContext httpContext) =>
+{
+    await using var conn = await db.OpenAsync();
+
+    var affected = await conn.ExecuteAsync("""
+        UPDATE api_clients
+        SET is_active = 0, revoked_at = CURRENT_TIMESTAMP
+        WHERE client_uid = @ClientUid AND is_active = 1
+        """, new { ClientUid = clientUid });
+
+    if (affected == 0)
+        return Results.NotFound(ErrorDto.Create("NOT_FOUND", "API client not found or already revoked."));
+
+    await audit.LogAsync("admin", "api_client_revoked", "api_client", clientUid,
+        httpContext.Connection.RemoteIpAddress?.ToString());
+
+    return Results.Ok(new AdminRevokeResponse(true, $"API client {clientUid} revoked."));
+});
+
 /* Audit log query */
 adminApi.MapGet("/audit-log", async (IDbConnectionFactory db, string? entityType, string? entityUid, int limit = 100) =>
 {
@@ -748,16 +923,27 @@ app.Run();
 
 file sealed class LeaseQueryRow
 {
-    public long     LicenseDbId       { get; set; }
-    public string   LicenseUid        { get; set; } = "";
-    public long     BuildDbId         { get; set; }
-    public string   BuildUid          { get; set; } = "";
-    public string   BuildStatus       { get; set; } = "";
-    public string   EncryptedSecretKey { get; set; } = "";
-    public string   LicenseStatus     { get; set; } = "";
-    public DateTime? ValidFrom        { get; set; }
-    public DateTime? ValidUntil       { get; set; }
-    public long     MaxActivations    { get; set; }
+    public long      LicenseDbId        { get; set; }
+    public string    LicenseUid         { get; set; } = "";
+    public long      BuildDbId          { get; set; }
+    public string    BuildUid           { get; set; } = "";
+    public string    BuildStatus        { get; set; } = "";
+    public string    EncryptedSecretKey { get; set; } = "";
+    public string    LicenseStatus      { get; set; } = "";
+    public DateTime? ValidFrom          { get; set; }
+    public DateTime? ValidUntil         { get; set; }
+    public long      MaxActivations     { get; set; }
+    public string?   FeaturesJson       { get; set; }
+    public string?   ConstraintsJson    { get; set; }
+}
+
+file sealed class ApiClientRow
+{
+    public string   ClientUid { get; set; } = "";
+    public string   Name      { get; set; } = "";
+    public string?  Scope     { get; set; }
+    public int      IsActive  { get; set; }
+    public DateTime CreatedAt { get; set; }
 }
 
 file sealed class AdminLicenseRow
