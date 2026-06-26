@@ -69,6 +69,7 @@ ZEND_BEGIN_MODULE_GLOBALS(mmloader)
     zend_long  offline_grace_seconds;
     zend_bool  require_signature;
     zend_bool  dev_mode;
+    zend_bool  dev_mode_warned;
     /* Per-process lease cache (in-RAM) */
     unsigned char cached_runtime_key[32];
     zend_bool     has_cached_key;
@@ -148,6 +149,7 @@ static void php_mmloader_init_globals(zend_mmloader_globals *g)
     g->offline_grace_seconds  = 604800;
     g->require_signature    = 1;
     g->dev_mode             = 0;
+    g->dev_mode_warned      = 0;
     memset(g->cached_runtime_key, 0, sizeof(g->cached_runtime_key));
     g->has_cached_key         = 0;
     g->cached_lease_expires   = 0;
@@ -1366,6 +1368,11 @@ PHP_RINIT_FUNCTION(mmloader)
 #if defined(ZTS) && defined(COMPILE_DL_MMLOADER)
     ZEND_TSRMLS_CACHE_UPDATE();
 #endif
+    if (MMLOADER_G(dev_mode) && !MMLOADER_G(dev_mode_warned)) {
+        php_error_docref(NULL, E_WARNING,
+            "MMENC mmloader: dev_mode is enabled — disable in production");
+        MMLOADER_G(dev_mode_warned) = 1;
+    }
     /* Proactive lease refresh: within 10 % of TTL → force re-fetch */
     if (MMLOADER_G(has_cached_key) && MMLOADER_G(cached_lease_expires) > 0) {
         time_t now      = time(NULL);

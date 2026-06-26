@@ -206,7 +206,7 @@ scripts/linux/build-all.sh
 ### .NET-Tests
 
 ```bash
-dotnet test src/LicenseServer.Tests/    # 5 In-Process-Integrationstests (SQLite)
+dotnet test src/LicenseServer.Tests/    # 13 In-Process-Integrationstests (SQLite, inkl. 8 Security-Tests)
 dotnet test src/EncoderCli.Tests/       # 40 Tests (Glob + MmIgnore + Compression)
 ```
 
@@ -325,23 +325,24 @@ Key routing rules:
 
 ---
 
-## Implementierungsstand (Stand 2026-06-26, zuletzt aktualisiert 2026-06-26)
+## Implementierungsstand (Stand 2026-06-27, zuletzt aktualisiert 2026-06-27)
 
-### LicenseServer (`src/LicenseServer/`) — **funktional, Demo-Krypto**
+### LicenseServer (`src/LicenseServer/`) — **produktionsbereit (Krypto konfigurierbar)**
 
 **Dateien:**
 
 | Datei | Inhalt |
 |---|---|
-| `Program.cs` | Alle 8 REST-Endpunkte als ASP.NET Core Minimal API; DapperDateTimeHandler; DatabaseProvider-Switch |
-| `Models/Contracts.cs` | Alle Request/Response-Records |
-| `Security/ApiKeyValidator.cs` | Bearer-Token-Prüfung gegen `Security:EncoderApiKeys`-Liste |
-| `Security/CryptoService.cs` | **DEMO** – HMAC-SHA256 statt ECDSA-P256; Build-Key als `"demo:"+plaintext` gespeichert |
+| `Program.cs` | 8 Encoder- + 7 Admin-REST-Endpunkte; Revocation; Audit-Log; validFrom-Check; AuditService-DI; Startup-Warnings |
+| `Models/Contracts.cs` | Alle Request/Response-Records inkl. Admin-DTOs |
+| `Security/ApiKeyValidator.cs` | Bearer-Token-Prüfung für Encoder- und Admin-Keys; `AdminApiKeyEndpointFilter` |
+| `Security/CryptoService.cs` | AES-256-GCM Build-Key-Verschlüsselung (`Security:KeyEncryptionKey`); ECDSA-P256-Signaturen (`Security:SigningPrivateKeyFile`); HMAC-SHA256-Fallback mit Startup-Warning |
+| `Data/AuditService.cs` | Schreibt alle sicherheitsrelevanten Events in `audit_log`; wirft nie |
 | `Data/IDbConnectionFactory.cs` | Abstraktion für MySQL und SQLite |
 | `Data/MySqlConnectionFactory.cs` | MySqlConnector-Implementierung |
 | `Data/SqliteConnectionFactory.cs` | Microsoft.Data.Sqlite-Implementierung |
 | `Data/DbLookup.cs` | UID→DB-ID-Hilfsfunktionen mit Dapper |
-| `appsettings.json` | DatabaseProvider, MySQL/SQLite ConnStr, API-Keys, Lease-TTL, `ReverseProxy`, `RateLimiting` |
+| `appsettings.json` | DatabaseProvider, MySQL/SQLite ConnStr, API-Keys, AdminApiKeys, KeyEncryptionKey, SigningPrivateKeyFile, Lease-TTL, `ReverseProxy`, `RateLimiting` |
 | `LicenseServer.csproj` | .NET 8, Dapper 2.1.66, MySqlConnector 2.4.0, Microsoft.Data.Sqlite 8.0.16 |
 
 **Implementierte Endpunkte:**
@@ -352,25 +353,37 @@ Key routing rules:
 - `POST /api/v1/encoder/builds/start` ✓
 - `POST /api/v1/encoder/builds/{buildId}/files` ✓
 - `POST /api/v1/encoder/builds/{buildId}/manifest/sign` ✓
-- `POST /api/v1/runtime/lease` ✓ (inkl. Lizenzstatus, Ablauf, Aktivierungszähler)
+- `POST /api/v1/runtime/lease` ✓ (inkl. Revocation, Audit-Log, validFrom, Aktivierungszähler-Fix)
+- `GET /api/v1/admin/licenses` ✓
+- `POST /api/v1/admin/licenses/{licenseUid}/revoke` ✓
+- `POST /api/v1/admin/builds/{buildUid}/revoke` ✓
+- `GET /api/v1/admin/activations` ✓
+- `POST /api/v1/admin/activations/{activationUid}/revoke` ✓
+- `DELETE /api/v1/admin/activations/{activationUid}` ✓
+- `GET /api/v1/admin/audit-log` ✓
 
 **Datenbankunterstützung:**
 - MySQL (Produktion): `"DatabaseProvider": "mysql"` in `appsettings.json`
 - SQLite (Entwicklung/Tests): `"DatabaseProvider": "sqlite"`, Schema in `database/sqlite/schema.sql`
 
+**Konfiguration für Produktion:**
+```bash
+# 32-Byte Key-Encryption-Key generieren:
+openssl rand -hex 32   # → Security:KeyEncryptionKey
+# ECDSA-P256 Signing Key generieren:
+scripts/linux/gen-signing-keys.sh /etc/mmprotect/
+# → Security:SigningPrivateKeyFile = "/etc/mmprotect/signing-private.pem"
+```
+
 **Bekannte Lücken / TODO für Produktion:**
 
 | Problem | Priorität |
 |---|---|
-| `CryptoService.SignForDemoOnly` nutzt HMAC-SHA256 statt ECDSA-P256 | KRITISCH |
-| `ProtectForDemoOnly` speichert Build-Key als `"demo:"+plaintext` in DB | KRITISCH |
-| Keine echte Revocation-Prüfung (`revocations`-Tabelle wird nie abgefragt) | HOCH |
-| Kein Audit-Log (Tabelle `audit_log` existiert im Schema, wird nie beschrieben) | HOCH |
-| Rate-Limiting für `/runtime/lease`: Fixed-Window per IP, konfigurierbar, abschaltbar | ✓ implementiert |
 | `JsonCanonical.Serialize` sortiert Properties nicht (kein echter Canonical-JSON) | MITTEL |
-| Aktivierungszähler-Logik: `activeCount > maxActivations` statt `>=` | NIEDRIG |
+| Keine PHP-Syntax-Prüfung vor Verschlüsselung (Encoder) | NIEDRIG |
+| `ManifestHash` in per-Datei-Header bleibt `"pending"` (zweiter Schreibdurchlauf fehlt) | HOCH (Encoder) |
 
-**Tests:** `LicenseServer.Tests/SmokeTests.cs` – **5 echte In-Process-Integrationstests** via `WebApplicationFactory` + SQLite (Health, Customer-Dedup, Project, voller Encoder-Flow, Runtime-Lease). Alle 5 bestehen.
+**Tests:** `LicenseServer.Tests/SmokeTests.cs` – **13 In-Process-Integrationstests** via `WebApplicationFactory` + SQLite (Health, Customer-Dedup, Project, voller Encoder-Flow, Runtime-Lease, + 8 Security-Tests). Alle 13 bestehen.
 
 ---
 
@@ -499,10 +512,10 @@ scripts/linux/build-decoder-php85.sh
 
 | Komponente | Reifegrad | Offene Punkte für Produktion |
 |---|---|---|
-| License Server | Funktional (Demo-Krypto) | ECDSA-P256 für Lease-Signaturen, Audit-Log, Revocation |
+| License Server | Produktionsbereit (Krypto konfigurierbar) | `Security:KeyEncryptionKey` + `SigningPrivateKeyFile` setzen; Canonical-JSON |
 | Encoder CLI | Vollständig lauffähig | ManifestHash-Update nach Encoding-Durchlauf |
-| PHP Decoder/Loader | Vollständig implementiert | – |
-| LicenseServer.Tests | 5/5 echte Integrationstests | Mehr Fehlerpfad-Tests (abgelaufene Lizenz, Revocation) |
+| PHP Decoder/Loader | Vollständig implementiert | dev_mode-Warnung (E_WARNING, einmalig) |
+| LicenseServer.Tests | 13/13 (inkl. 8 Security-Tests) | – |
 | EncoderCli.Tests | 40/40 (Glob + MmIgnore + Compression) | – |
 | E2E-Integrationstest | 7/7 (PHP 8.5 skip) | PHP 8.5: `sudo apt install php8.5-dev` + build |
 | Demo-Projekt-Tests | 31/31 (PHP 8.5 skip) | PHP 8.5: siehe oben |

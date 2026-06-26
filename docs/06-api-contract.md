@@ -227,6 +227,60 @@ Alle Fehlerantworten:
 }
 ```
 
+---
+
+## Admin API
+
+Basis-Pfad: `/api/v1/admin/`
+Authentifizierung: `Authorization: Bearer <admin-api-key>` (aus `Security:AdminApiKeys`)
+
+### GET /api/v1/admin/licenses
+
+Listet Lizenzen auf. Optionaler Query-Parameter: `?status=active|revoked|suspended|expired`
+
+Response: `{ "licenses": [...] }` — Array von `AdminLicenseDto`.
+
+### POST /api/v1/admin/licenses/{licenseUid}/revoke
+
+Setzt Lizenzstatus auf `revoked` und schreibt Eintrag in `revocations`.
+
+Request: `{ "reason": "optional reason" }`
+Response: `{ "revoked": true, "message": "..." }`
+
+### POST /api/v1/admin/builds/{buildUid}/revoke
+
+Setzt `builds.status = 'revoked'` und schreibt Eintrag in `revocations`.
+
+Request: `{ "reason": "optional reason" }`
+Response: `{ "revoked": true, "message": "..." }`
+
+### GET /api/v1/admin/activations
+
+Listet Aktivierungen auf. Optionaler Query-Parameter: `?licenseUid=lic_...`
+
+Response: `{ "activations": [...] }` — Array von `AdminActivationDto`.
+
+### POST /api/v1/admin/activations/{activationUid}/revoke
+
+Setzt Aktivierungsstatus auf `revoked`.
+
+Request: `{ "reason": "optional reason" }`
+Response: `{ "revoked": true, "message": "..." }`
+
+### DELETE /api/v1/admin/activations/{activationUid}
+
+Löscht eine Aktivierung (ermöglicht Re-Aktivierung von derselben Maschine).
+
+Response: `{ "revoked": true, "message": "..." }`
+
+### GET /api/v1/admin/audit-log
+
+Abfrage des Audit-Logs. Optionale Parameter: `?entityType=license&entityUid=lic_...&limit=100`
+
+Response: `{ "events": [...] }` — Array von `AdminAuditEventDto`.
+
+---
+
 ## Fehlercodes
 
 ```text
@@ -237,6 +291,7 @@ CUSTOMER_NOT_FOUND
 PROJECT_NOT_FOUND
 LICENSE_NOT_FOUND
 LICENSE_EXPIRED
+LICENSE_NOT_YET_VALID
 LICENSE_REVOKED
 ACTIVATION_LIMIT_REACHED
 BUILD_NOT_FOUND

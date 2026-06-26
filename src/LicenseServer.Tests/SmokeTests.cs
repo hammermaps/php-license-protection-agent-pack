@@ -44,6 +44,7 @@ public sealed class SmokeTests : IDisposable
                 builder.UseSetting("DatabaseProvider", "sqlite");
                 builder.UseSetting("ConnectionStrings:Sqlite", $"Data Source={_dbPath}");
                 builder.UseSetting("Security:EncoderApiKeys:0", "test-api-key");
+                builder.UseSetting("Security:AdminApiKeys:0", "test-admin-key");
                 builder.UseSetting("Security:LeaseTtlMinutes", "60");
                 builder.UseSetting("Security:GracePeriodDays", "7");
             });
@@ -220,6 +221,228 @@ public sealed class SmokeTests : IDisposable
         var leaseBody = await leaseResp.Content.ReadAsStringAsync();
         Assert.Contains("MMENC-LEASE-1", leaseBody);
         Assert.Contains("runtimeKey", leaseBody);
+    }
+
+    /* ── Security tests ──────────────────────────────────────────────────── */
+
+    [Fact]
+    public async Task RuntimeLease_ExpiredLicense_Rejected()
+    {
+        var (_, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
+            "cref-exp", "proj-exp", "MM-EXP-001",
+            validFrom: "2020-01-01T00:00:00Z",
+            validUntil: "2021-01-01T00:00:00Z");  // past
+
+        var resp = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("LICENSE_EXPIRED", body);
+    }
+
+    [Fact]
+    public async Task RuntimeLease_FutureLicense_Rejected()
+    {
+        var (_, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
+            "cref-fut", "proj-fut", "MM-FUT-001",
+            validFrom: "2099-01-01T00:00:00Z",
+            validUntil: "2100-01-01T00:00:00Z");  // not yet valid
+
+        var resp = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("LICENSE_NOT_YET_VALID", body);
+    }
+
+    [Fact]
+    public async Task RuntimeLease_RevokedLicenseStatus_Rejected()
+    {
+        var (buildClient, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
+            "cref-rev-status", "proj-rev-status", "MM-REVST-001");
+
+        // Directly update license status in DB
+        await using var conn = new SqliteConnection($"Data Source={_dbPath}");
+        conn.Open();
+        await conn.ExecuteAsync("UPDATE licenses SET status = 'revoked' WHERE license_uid = @Id", new { Id = licenseId });
+
+        var resp = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("LICENSE_REVOKED", body);
+    }
+
+    [Fact]
+    public async Task RuntimeLease_RevokedViaRevocationsTable_Rejected()
+    {
+        var (_, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
+            "cref-revtbl", "proj-revtbl", "MM-REVTBL-001");
+
+        await using var conn = new SqliteConnection($"Data Source={_dbPath}");
+        conn.Open();
+        await conn.ExecuteAsync(
+            "INSERT INTO revocations (revocation_uid, entity_type, entity_uid, reason) VALUES (@Uid, 'license', @LicId, 'test')",
+            new { Uid = "rev_" + Guid.NewGuid().ToString("N"), LicId = licenseId });
+
+        var resp = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("LEASE_DENIED", body);
+    }
+
+    [Fact]
+    public async Task RuntimeLease_RevokedBuild_Rejected()
+    {
+        var (_, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
+            "cref-revbld", "proj-revbld", "MM-REVBLD-001");
+
+        await using var conn = new SqliteConnection($"Data Source={_dbPath}");
+        conn.Open();
+        await conn.ExecuteAsync(
+            "UPDATE builds SET status = 'revoked' WHERE build_uid = @Id", new { Id = buildId });
+
+        var resp = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("LEASE_DENIED", body);
+    }
+
+    [Fact]
+    public async Task RuntimeLease_ActivationLimitReached_Rejected()
+    {
+        var (_, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
+            "cref-actlim", "proj-actlim", "MM-ACTLIM-001", maxActivations: 1);
+
+        // First lease → should succeed (inserts 1 activation)
+        var first = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash,
+            fingerprint: "sha256:" + new string('b', 64));
+        Assert.Equal(System.Net.HttpStatusCode.OK, first.StatusCode);
+
+        // Second lease with different machine → limit reached
+        var second = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash,
+            fingerprint: "sha256:" + new string('c', 64));
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, second.StatusCode);
+        var body = await second.Content.ReadAsStringAsync();
+        Assert.Contains("ACTIVATION_LIMIT_REACHED", body);
+    }
+
+    [Fact]
+    public async Task RuntimeLease_InvalidManifestHash_Rejected()
+    {
+        var (_, leaseClient, licenseId, buildId, _) = await SetupBuildAsync(
+            "cref-badmf", "proj-badmf", "MM-BADMF-001");
+
+        var resp = await RequestLeaseAsync(leaseClient, licenseId, buildId, "sha256:wrong000");
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task AdminRevoke_License_BlocksLease()
+    {
+        var (_, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
+            "cref-admrev", "proj-admrev", "MM-ADMREV-001");
+
+        // Revoke via admin API
+        var adminClient = _factory.CreateClient();
+        adminClient.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "test-admin-key");
+
+        var revokeResp = await adminClient.PostAsJsonAsync(
+            $"/api/v1/admin/licenses/{licenseId}/revoke", new { reason = "test" });
+        revokeResp.EnsureSuccessStatusCode();
+        var revokeBody = await revokeResp.Content.ReadAsStringAsync();
+        Assert.Contains("true", revokeBody);
+
+        // Lease attempt after revocation → rejected
+        var leaseResp = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, leaseResp.StatusCode);
+        var body = await leaseResp.Content.ReadAsStringAsync();
+        Assert.True(body.Contains("LEASE_DENIED") || body.Contains("LICENSE_REVOKED"),
+            $"Expected LEASE_DENIED or LICENSE_REVOKED but got: {body}");
+    }
+
+    /* ── Security test helpers ───────────────────────────────────────────── */
+
+    private async Task<(HttpClient BuildClient, HttpClient LeaseClient, string LicenseId, string BuildId, string ManifestHash)>
+        SetupBuildAsync(
+            string custRef, string projKey, string licKey,
+            string validFrom = "2026-01-01T00:00:00Z",
+            string? validUntil = "2030-01-01T00:00:00Z",
+            int maxActivations = 5)
+    {
+        var buildClient = _factory.CreateClient();
+        buildClient.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "test-api-key");
+
+        var customer = await PostJsonViaAsync<CustomerUpsertDto>(buildClient,
+            "/api/v1/encoder/customers/upsert", new
+            { externalCustomerRef = custRef, name = custRef, email = "t@example.com", notes = "" });
+
+        var project = await PostJsonViaAsync<ProjectUpsertDto>(buildClient,
+            "/api/v1/encoder/projects/upsert", new
+            { projectKey = projKey, name = projKey, phpMinVersion = "8.4", description = "" });
+
+        var license = await PostJsonViaAsync<LicenseUpsertDto>(buildClient,
+            "/api/v1/encoder/licenses/upsert", new
+            {
+                customerId = customer.CustomerId,
+                projectId = project.ProjectId,
+                licenseKey = licKey,
+                validFrom,
+                validUntil,
+                maxActivations,
+                features = Array.Empty<string>()
+            });
+
+        var build = await PostJsonViaAsync<BuildStartDto>(buildClient,
+            "/api/v1/encoder/builds/start", new
+            {
+                projectId = project.ProjectId,
+                customerId = customer.CustomerId,
+                licenseId = license.LicenseId,
+                version = "1.0.0",
+                sourceRevision = "HEAD",
+                encoderVersion = "test"
+            });
+
+        var manifestHash = "sha256:" + Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(licKey + "-manifest"))).ToLowerInvariant();
+
+        await buildClient.PostAsJsonAsync($"/api/v1/encoder/builds/{build.BuildId}/manifest/sign",
+            new { manifestHash, fileCount = 0 });
+
+        var leaseClient = _factory.CreateClient();
+
+        return (buildClient, leaseClient, license.LicenseId, build.BuildId, manifestHash);
+    }
+
+    private async Task<HttpResponseMessage> RequestLeaseAsync(
+        HttpClient client,
+        string licenseId,
+        string buildId,
+        string manifestHash,
+        string? fingerprint = null)
+    {
+        return await client.PostAsJsonAsync("/api/v1/runtime/lease", new
+        {
+            projectId = "proj-test",
+            customerId = "cust-test",
+            licenseId,
+            buildId,
+            manifestHash,
+            machineFingerprint = fingerprint ?? ("sha256:" + new string('a', 64)),
+            loaderVersion = "0.1.0",
+            phpVersion = "8.4.0",
+            sapi = "cli",
+            nonce = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16))
+        });
+    }
+
+    private async Task<T> PostJsonViaAsync<T>(HttpClient client, string url, object body)
+    {
+        var resp = await client.PostAsJsonAsync(url, body);
+        resp.EnsureSuccessStatusCode();
+        var text = await resp.Content.ReadAsStringAsync();
+        return JsonSerializer.Deserialize<T>(text, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
     }
 
     // ---- Helpers ----

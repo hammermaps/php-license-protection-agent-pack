@@ -1,5 +1,7 @@
 namespace MmProtect.LicenseServer.Models;
 
+/* ── Encoder API ──────────────────────────────────────────────────────────── */
+
 public sealed record CustomerUpsertRequest(string ExternalCustomerRef, string Name, string? Email, string? Notes);
 public sealed record CustomerUpsertResponse(string CustomerId, bool Created);
 
@@ -41,6 +43,8 @@ public sealed record BuildFileDto(
 public sealed record ManifestSignRequest(string ManifestHash, int FileCount);
 public sealed record ManifestSignResponse(string ManifestSignature, string VendorPublicKeyId, DateTimeOffset ServerTimeUtc);
 
+/* ── Runtime API ─────────────────────────────────────────────────────────── */
+
 public sealed record RuntimeLeaseRequest(
     string ProjectId,
     string CustomerId,
@@ -66,3 +70,37 @@ public sealed record RuntimeLeaseResponse(
     DateTimeOffset ExpiresAt,
     DateTimeOffset GraceUntil,
     string Signature);
+
+/* ── Admin API ───────────────────────────────────────────────────────────── */
+
+public sealed record AdminRevokeRequest(string? Reason);
+
+public sealed record AdminRevokeResponse(bool Revoked, string Message);
+
+public sealed record AdminLicenseDto(
+    string LicenseId,
+    string LicenseKey,
+    string CustomerId,
+    string ProjectId,
+    string Status,
+    DateTime? ValidUntil,
+    int MaxActivations,
+    DateTime CreatedAt);
+
+public sealed record AdminActivationDto(
+    string ActivationId,
+    string LicenseId,
+    string MachineFingerprint,
+    string Status,
+    DateTime FirstSeenAt,
+    DateTime LastSeenAt);
+
+public sealed record AdminAuditEventDto(
+    string EventId,
+    string ActorType,
+    string EventType,
+    string? EntityType,
+    string? EntityUid,
+    string? IpAddress,
+    string? Details,
+    DateTime CreatedAt);

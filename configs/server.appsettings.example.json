@@ -8,6 +8,8 @@
     "LeaseTtlMinutes": 1440,
     "GracePeriodDays": 7,
     "EncoderApiKeys": [ "CHANGE-ME-STRONG-RANDOM-KEY" ],
+    "AdminApiKeys": [ "CHANGE-ME-STRONG-ADMIN-KEY" ],
+    "KeyEncryptionKey": "CHANGE-ME-64-HEX-CHARS-openssl-rand-hex-32",
     "SigningPrivateKeyFile": "/etc/mmprotect/signing-private.pem"
   },
 
