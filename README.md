@@ -225,10 +225,20 @@ Format-Referenz: [`docs/encryption-format.md`](docs/encryption-format.md)
 
 ## Dokumentation
 
+### Schnellstart-Anleitungen
+
+| Anleitung | Zielgruppe | Dauer |
+|---|---|---|
+| [`docs/quickstart-operator.md`](docs/quickstart-operator.md) | Serverbetreiber — License Server aufsetzen | ~15 Min. |
+| [`docs/quickstart-enduser.md`](docs/quickstart-enduser.md) | Endkunden — mmloader.so installieren | ~10 Min. |
+| [`docs/quickstart-developer.md`](docs/quickstart-developer.md) | Entwickler — lokaler E2E-Flow | ~20 Min. |
+
+### Vollständige Referenz
+
 | Dokument | Zielgruppe |
 |---|---|
-| [`docs/operator-guide.md`](docs/operator-guide.md) | Serverbetreiber (License Server installieren) |
-| [`docs/encryption-format.md`](docs/encryption-format.md) | Entwickler (Format, Krypto, Protokoll) |
+| [`docs/operator-guide.md`](docs/operator-guide.md) | Serverbetreiber (License Server vollständig) |
+| [`docs/end-user-install.md`](docs/end-user-install.md) | Endkunden (Extension vollständig) |
 | [`docs/build-guide.md`](docs/build-guide.md) | Entwickler (Bauen, Testen, CI/CD) |
-| [`docs/end-user-install.md`](docs/end-user-install.md) | Endkunden (mmloader.so installieren) |
+| [`docs/encryption-format.md`](docs/encryption-format.md) | Entwickler (Format, Krypto, Protokoll) |
 | [`docs/06-api-contract.md`](docs/06-api-contract.md) | Entwickler (REST API Referenz) |
