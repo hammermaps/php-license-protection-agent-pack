@@ -111,6 +111,7 @@ repo/
 │  ├─ 05-build-test-jenkins.md
 │  ├─ 06-api-contract.md
 │  ├─ operator-guide.md          ← Serverbetreiber-Dokumentation
+│  ├─ proxy-setup.md             ← Reverse-Proxy / Load-Balancer-Setup + Rate-Limiting
 │  ├─ encryption-format.md       ← Verschlüsselungsformat-Referenz
 │  ├─ build-guide.md             ← Build-Anleitung für alle Komponenten
 │  └─ end-user-install.md        ← Extension-Installationsanleitung für Endkunden
@@ -340,7 +341,7 @@ Key routing rules:
 | `Data/MySqlConnectionFactory.cs` | MySqlConnector-Implementierung |
 | `Data/SqliteConnectionFactory.cs` | Microsoft.Data.Sqlite-Implementierung |
 | `Data/DbLookup.cs` | UID→DB-ID-Hilfsfunktionen mit Dapper |
-| `appsettings.json` | DatabaseProvider, MySQL/SQLite ConnStr, API-Keys, Lease-TTL |
+| `appsettings.json` | DatabaseProvider, MySQL/SQLite ConnStr, API-Keys, Lease-TTL, `ReverseProxy`, `RateLimiting` |
 | `LicenseServer.csproj` | .NET 8, Dapper 2.1.66, MySqlConnector 2.4.0, Microsoft.Data.Sqlite 8.0.16 |
 
 **Implementierte Endpunkte:**
@@ -365,7 +366,7 @@ Key routing rules:
 | `ProtectForDemoOnly` speichert Build-Key als `"demo:"+plaintext` in DB | KRITISCH |
 | Keine echte Revocation-Prüfung (`revocations`-Tabelle wird nie abgefragt) | HOCH |
 | Kein Audit-Log (Tabelle `audit_log` existiert im Schema, wird nie beschrieben) | HOCH |
-| Kein Rate-Limiting für `/runtime/lease` | HOCH |
+| Rate-Limiting für `/runtime/lease`: Fixed-Window per IP, konfigurierbar, abschaltbar | ✓ implementiert |
 | `JsonCanonical.Serialize` sortiert Properties nicht (kein echter Canonical-JSON) | MITTEL |
 | Aktivierungszähler-Logik: `activeCount > maxActivations` statt `>=` | NIEDRIG |
 
@@ -498,7 +499,7 @@ scripts/linux/build-decoder-php85.sh
 
 | Komponente | Reifegrad | Offene Punkte für Produktion |
 |---|---|---|
-| License Server | Funktional (Demo-Krypto) | ECDSA-P256 für Lease-Signaturen, Audit-Log, Revocation, Rate-Limiting |
+| License Server | Funktional (Demo-Krypto) | ECDSA-P256 für Lease-Signaturen, Audit-Log, Revocation |
 | Encoder CLI | Vollständig lauffähig | ManifestHash-Update nach Encoding-Durchlauf |
 | PHP Decoder/Loader | Vollständig implementiert | – |
 | LicenseServer.Tests | 5/5 echte Integrationstests | Mehr Fehlerpfad-Tests (abgelaufene Lizenz, Revocation) |

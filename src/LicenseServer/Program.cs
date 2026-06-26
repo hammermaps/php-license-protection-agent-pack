@@ -1,9 +1,12 @@
 using Dapper;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using MmProtect.LicenseServer.Data;
 using MmProtect.LicenseServer.Models;
 using MmProtect.LicenseServer.Security;
-using System.Data.Common;
+using System.Net;
 using System.Security.Cryptography;
+using System.Threading.RateLimiting;
 
 // Register Dapper DateTime handler so SQLite TEXT dates map to DateTime correctly.
 SqlMapper.AddTypeHandler(new DapperDateTimeHandler());
@@ -22,7 +25,106 @@ builder.Services.AddSingleton<ApiKeyValidator>();
 builder.Services.AddSingleton<CryptoService>();
 builder.Services.AddEndpointsApiExplorer();
 
+// ── Reverse-Proxy / ForwardedHeaders ──────────────────────────────────────
+// Reads X-Forwarded-For and X-Forwarded-Proto only from explicitly trusted
+// proxy IPs/networks. Disabled by default — set ReverseProxy:Enabled = true
+// when the server sits behind nginx/Apache/HAProxy.
+var proxySection = builder.Configuration.GetSection("ReverseProxy");
+bool proxyEnabled = proxySection.GetValue<bool>("Enabled", false);
+
+if (proxyEnabled)
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders =
+            ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+
+        // Trust only explicitly configured sources — reject all others by default.
+        options.KnownNetworks.Clear();
+        options.KnownProxies.Clear();
+
+        // Single proxy IPs (e.g. "127.0.0.1", "::1", "10.0.0.1")
+        var trustedProxies = proxySection.GetSection("TrustedProxies")
+                                         .Get<string[]>() ?? [];
+        foreach (var raw in trustedProxies)
+        {
+            if (IPAddress.TryParse(raw.Trim(), out var ip))
+                options.KnownProxies.Add(ip);
+        }
+
+        // CIDR networks (e.g. "10.0.0.0/8", "172.16.0.0/12")
+        var trustedNetworks = proxySection.GetSection("TrustedNetworks")
+                                          .Get<string[]>() ?? [];
+        foreach (var cidr in trustedNetworks)
+        {
+            var slash = cidr.IndexOf('/');
+            if (slash > 0
+                && IPAddress.TryParse(cidr[..slash].Trim(), out var prefix)
+                && int.TryParse(cidr[(slash + 1)..].Trim(), out var length))
+            {
+                options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(prefix, length));
+            }
+        }
+
+        // How many hops of X-Forwarded-For to trust (1 = only the last proxy)
+        options.ForwardLimit = proxySection.GetValue<int>("ForwardLimit", 1);
+    });
+}
+
+// ── Rate Limiting (brute-force protection on /runtime/lease) ─────────────
+// Fixed-window limiter per client IP. Toggled via RateLimiting:Enabled.
+// Applies only to the runtime lease endpoint (encoder API uses API-key auth).
+const string RateLimitPolicyLease = "lease";
+
+builder.Services.AddRateLimiter(options =>
+{
+    var rlSection = builder.Configuration.GetSection("RateLimiting");
+    bool rlEnabled = rlSection.GetValue<bool>("Enabled", true);
+
+    if (!rlEnabled)
+    {
+        // Disabled — unconditionally permit all requests
+        options.AddPolicy(RateLimitPolicyLease, _ =>
+            RateLimitPartition.GetNoLimiter("*"));
+        return;
+    }
+
+    int permitLimit   = rlSection.GetValue("LeaseEndpoint:PermitLimit", 10);
+    int windowSeconds = rlSection.GetValue("LeaseEndpoint:WindowSeconds", 60);
+    int queueLimit    = rlSection.GetValue("LeaseEndpoint:QueueLimit", 0);
+
+    options.AddPolicy<string>(RateLimitPolicyLease, context =>
+    {
+        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(ip,
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit            = permitLimit,
+                Window                 = TimeSpan.FromSeconds(windowSeconds),
+                QueueLimit             = queueLimit,
+                QueueProcessingOrder   = QueueProcessingOrder.OldestFirst,
+                AutoReplenishment      = true
+            });
+    });
+
+    options.OnRejected = async (ctx, ct) =>
+    {
+        ctx.HttpContext.Response.StatusCode = 429;
+        ctx.HttpContext.Response.Headers["Retry-After"] =
+            windowSeconds.ToString();
+        await ctx.HttpContext.Response.WriteAsJsonAsync(
+            ErrorDto.Create("RATE_LIMITED", "Too many lease requests. Try again later."),
+            cancellationToken: ct);
+    };
+});
+
 var app = builder.Build();
+
+// ForwardedHeaders MUST run before any middleware that reads the IP.
+if (proxyEnabled)
+    app.UseForwardedHeaders();
+
+app.UseRateLimiter();
 
 app.MapGet("/health", () => Results.Ok(new
 {
@@ -344,7 +446,7 @@ app.MapPost("/api/v1/runtime/lease", async (RuntimeLeaseRequest request, IDbConn
         expiresAt,
         graceUntil,
         signature));
-});
+}).RequireRateLimiting(RateLimitPolicyLease);
 
 app.Run();
 

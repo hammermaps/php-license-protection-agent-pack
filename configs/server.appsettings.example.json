@@ -1,17 +1,36 @@
 {
+  "DatabaseProvider": "mysql",
   "ConnectionStrings": {
-    "MySql": "Server=localhost;Port=3306;Database=mm_license;User=mm_license;Password=change-me;TreatTinyAsBoolean=true;"
+    "MySql": "Server=localhost;Port=3306;Database=mm_license;User=mm_license;Password=CHANGE-ME;TreatTinyAsBoolean=true;",
+    "Sqlite": "Data Source=/var/lib/mmprotect/mm_license.db"
   },
   "Security": {
-    "Issuer": "MM License Server",
     "LeaseTtlMinutes": 1440,
     "GracePeriodDays": 7,
-    "RuntimeRateLimitPerMinute": 60
+    "EncoderApiKeys": [ "CHANGE-ME-STRONG-RANDOM-KEY" ],
+    "SigningPrivateKeyFile": "/etc/mmprotect/signing-private.pem"
   },
-  "Keys": {
-    "VendorSigningPrivateKeyPath": "/etc/mmprotect/vendor_signing_private.pem",
-    "VendorSigningPublicKeyPath": "/etc/mmprotect/vendor_signing_public.pem"
+
+  "ReverseProxy": {
+    "Enabled": false,
+    "TrustedProxies": [
+      "127.0.0.1",
+      "::1"
+    ],
+    "TrustedNetworks": [
+    ],
+    "ForwardLimit": 1
   },
+
+  "RateLimiting": {
+    "Enabled": true,
+    "LeaseEndpoint": {
+      "PermitLimit": 10,
+      "WindowSeconds": 60,
+      "QueueLimit": 0
+    }
+  },
+
   "Logging": {
     "LogLevel": {
       "Default": "Information",
