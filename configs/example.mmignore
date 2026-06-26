@@ -1,0 +1,62 @@
+# MMProtect .mmignore — Beispieldatei
+#
+# Ablegen in jedem Quellverzeichnis das kontrolliert werden soll.
+# Regeln gelten für dieses Verzeichnis und alle Unterverzeichnisse.
+# Innere Verzeichnisse überschreiben Regeln aus äußeren Verzeichnissen.
+#
+# Syntax:
+#   vendor/          → Ausschließen (Verzeichnis und gesamter Inhalt)
+#   *.test.php       → Ausschließen (Dateinamen-Muster, überall im Teilbaum)
+#   src/Cache/       → Ausschließen (pfad-verankert, ab diesem Verzeichnis)
+#   + public/        → Als Klartext kopieren (nicht verschlüsseln)
+#   + composer.json  → Einzelne Datei als Klartext kopieren
+#   !wichtig.php     → Einschluss erzwingen (vorherigen Ausschluss aufheben)
+#   # Kommentar      → Wird ignoriert
+#
+# Standard wenn KEINE Regel zutrifft:
+#   .php-Dateien → verschlüsseln
+#   alle anderen → überspringen (nicht kopieren)
+
+# ── Ausschlüsse (nie in den Output) ──────────────────────────────────────────
+
+# Composer-Abhängigkeiten werden nie verschlüsselt und auch nie kopiert
+# (füge "+ vendor/" hinzu, wenn du sie als Klartext kopieren willst)
+vendor/
+
+# Entwickler-Werkzeuge
+node_modules/
+.git/
+.idea/
+.vscode/
+
+# Test-Code
+tests/
+*.test.php
+*.spec.php
+
+# Umgebungsdateien
+.env
+.env.*
+*.local
+
+# Build-Artefakte
+*.log
+*.cache
+
+# ── Klartext-Kopien (kopieren ohne Verschlüsselung) ──────────────────────────
+
+# Composer-Autoloader und Abhängigkeiten als Klartext kopieren
++ vendor/
++ composer.json
++ composer.lock
+
+# Öffentliche Assets (Web-Root)
++ public/
+
+# Konfiguration (falls gewünscht — andernfalls diese Zeile löschen)
+# + config/
+
+# ── Ausnahmen (vorherige Ausschlüsse aufheben) ────────────────────────────────
+
+# Beispiel: tests/ ist ausgeschlossen, aber tests/bootstrap.php wird trotzdem gebraucht
+# !tests/bootstrap.php

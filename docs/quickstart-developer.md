@@ -173,7 +173,7 @@ ls /tmp/mm_encoded_demo/.mmprotect/
 php8.4 \
   -d extension=artifacts/decoder/linux-x64/mmloader.so \
   -d mmloader.dev_mode=1 \
-  -d mmloader.dev_buildkey_file=/tmp/mm_encoded_demo/.mmprotect/dev-buildkey.b64 \
+  -d mmloader.dev_buildkey=/tmp/mm_encoded_demo/.mmprotect/dev-buildkey.b64 \
   /tmp/mm_encoded_demo/public/index.php
 # → MMProtect Demo: protected project code executed
 ```
@@ -197,7 +197,7 @@ php8.4 \
   -d opcache.enable_cli=1 \
   -d extension=artifacts/decoder/linux-x64/mmloader.so \
   -d mmloader.dev_mode=1 \
-  -d mmloader.dev_buildkey_file=/tmp/mm_encoded_demo/.mmprotect/dev-buildkey.b64 \
+  -d mmloader.dev_buildkey=/tmp/mm_encoded_demo/.mmprotect/dev-buildkey.b64 \
   /tmp/mm_encoded_demo/public/index.php
 ```
 

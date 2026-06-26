@@ -41,6 +41,70 @@ try
             return 0;
         }
 
+        case "encode-dir":
+        {
+            var sourceDir = cli.SourceDir
+                ?? throw new InvalidOperationException("--source <Verzeichnis> ist erforderlich.");
+            var outputDir = cli.OutputDir
+                ?? throw new InvalidOperationException("--output <Verzeichnis> ist erforderlich.");
+
+            // Load .mmignore rule set from source tree
+            var mmIgnore = MmIgnoreRuleSet.LoadFromSourceRoot(sourceDir, cli.MmIgnoreFile);
+
+            if (cli.DevMode || string.IsNullOrEmpty(GetConfigPathIfExists(cli)))
+            {
+                // === Dev mode: no license server ===
+                if (!cli.DevMode)
+                    Console.WriteLine("[WARN] Kein --config angegeben → Dev-Modus (kein License Server).");
+
+                SigningOptions? signing = null;
+                if (File.Exists(cli.ConfigPath))
+                {
+                    try
+                    {
+                        var cfg = EncoderConfigLoader.Load(cli.ConfigPath);
+                        signing = cfg.Defaults.Signing;
+                        // Also merge mmIgnoreFile from config
+                        if (mmIgnore.HasRules == false && cfg.Defaults.MmIgnoreFile != null)
+                            mmIgnore = MmIgnoreRuleSet.LoadFromSourceRoot(sourceDir, cfg.Defaults.MmIgnoreFile);
+                    }
+                    catch { /* config optional in dev mode */ }
+                }
+
+                var localEncoder = new LocalDevEncoder();
+                await localEncoder.EncodeAsync(
+                    sourceDir, outputDir, mmIgnore, signing,
+                    cli.Verbose, cli.DryRun);
+            }
+            else
+            {
+                // === Production mode: use license server from config ===
+                var config = EncoderConfigLoader.Load(cli.ConfigPath);
+                var project = config.GetProject(cli.ProjectKey, allowFirst: false);
+
+                // Command-line --source / --output override the config values
+                project.SourceRoot = Path.GetFullPath(sourceDir);
+                project.OutputRoot = Path.GetFullPath(outputDir);
+
+                // Merge global .mmignore from CLI flag into config
+                if (cli.MmIgnoreFile != null)
+                    config.Defaults.MmIgnoreFile = cli.MmIgnoreFile;
+
+                var apiKey = config.LicenseServer.ResolveApiKey();
+                using var http = new HttpClient
+                {
+                    BaseAddress = new Uri(config.LicenseServer.BaseUrl.TrimEnd('/') + "/"),
+                    Timeout = TimeSpan.FromSeconds(config.LicenseServer.TimeoutSeconds <= 0 ? 30 : config.LicenseServer.TimeoutSeconds)
+                };
+
+                var client = new LicenseServerClient(http, apiKey);
+                var encoder = new ProjectEncoder(client);
+                await encoder.EncodeAsync(config, project, cli.Verbose);
+            }
+
+            return 0;
+        }
+
         case "manifest":
         {
             var config = EncoderConfigLoader.Load(cli.ConfigPath);
@@ -75,3 +139,6 @@ catch (Exception ex)
         Console.Error.WriteLine(ex);
     return 1;
 }
+
+static string? GetConfigPathIfExists(CliArgs cli)
+    => File.Exists(cli.ConfigPath) ? cli.ConfigPath : null;

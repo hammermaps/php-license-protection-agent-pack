@@ -54,6 +54,12 @@ public sealed class DefaultOptions
     public bool DevMode { get; set; } = false;
     /// <summary>Week 4: ECDSA-P256 signing options. Null = SHA-256 demo hash.</summary>
     public SigningOptions? Signing { get; set; }
+
+    /// <summary>
+    /// Optional path to a global .mmignore file applied before any directory-local .mmignore files.
+    /// Useful to enforce project-wide exclusions independently of the source tree.
+    /// </summary>
+    public string? MmIgnoreFile { get; set; }
 }
 
 /// <summary>

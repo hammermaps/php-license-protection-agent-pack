@@ -64,11 +64,43 @@ public sealed class ProjectEncoder
             encoderVersion = typeof(ProjectEncoder).Assembly.GetName().Version?.ToString() ?? "dev"
         });
 
-        CopyPlainFiles(sourceRoot, outputRoot, project.CopyPlain, project.Exclude, verbose);
+        // Load .mmignore files from the source tree (cascading)
+        var mmIgnoreFile = config.Defaults.MmIgnoreFile;
+        var mmIgnore = MmIgnoreRuleSet.LoadFromSourceRoot(sourceRoot, mmIgnoreFile);
 
-        var files = FileSelector.SelectFiles(sourceRoot, project.Include, project.Exclude)
-            .Where(p => string.Equals(Path.GetExtension(p), ".php", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        List<string> files;
+        if (mmIgnore.HasRules)
+        {
+            // .mmignore-driven selection: combine with config include/exclude/copyPlain
+            var selected = FileSelector.SelectFilesWithMmIgnore(
+                sourceRoot, mmIgnore,
+                project.Include.Count > 0 ? project.Include : null,
+                project.Exclude.Count > 0 ? project.Exclude : null,
+                project.CopyPlain.Count > 0 ? project.CopyPlain : null);
+
+            foreach (var (absPath, action) in selected.Where(f => f.Action == FileAction.CopyPlain))
+            {
+                var rel = Path.GetRelativePath(sourceRoot, absPath);
+                var target = Path.Combine(outputRoot, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(absPath, target, overwrite: true);
+                if (verbose) Console.WriteLine($"copied: {rel.Replace('\\', '/')}");
+            }
+
+            files = selected
+                .Where(f => f.Action == FileAction.Encode)
+                .Where(f => string.Equals(Path.GetExtension(f.AbsPath), ".php", StringComparison.OrdinalIgnoreCase))
+                .Select(f => f.AbsPath)
+                .ToList();
+        }
+        else
+        {
+            // Legacy glob-based selection (config include/exclude/copyPlain)
+            CopyPlainFiles(sourceRoot, outputRoot, project.CopyPlain, project.Exclude, verbose);
+            files = FileSelector.SelectFiles(sourceRoot, project.Include, project.Exclude)
+                .Where(p => string.Equals(Path.GetExtension(p), ".php", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
 
         var buildKey = Convert.FromBase64String(build.BuildKey);
         var manifestFiles = new List<ManifestFileDto>();
