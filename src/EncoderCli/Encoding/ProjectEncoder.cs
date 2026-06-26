@@ -109,6 +109,12 @@ public sealed class ProjectEncoder
         {
             var relative = Path.GetRelativePath(sourceRoot, path).Replace('\\', '/');
             var plain = await File.ReadAllBytesAsync(path);
+            if (config.Defaults.Obfuscate)
+            {
+                var text = System.Text.Encoding.UTF8.GetString(plain);
+                text = PhpObfuscator.Obfuscate(text);
+                plain = System.Text.Encoding.UTF8.GetBytes(text);
+            }
             var fileId = "file_" + Hashing.ShortSha256(relative);
             var pathHash = "sha256:" + Hashing.Sha256Hex(relative);
             var plainHash = "sha256:" + Hashing.Sha256Hex(plain);

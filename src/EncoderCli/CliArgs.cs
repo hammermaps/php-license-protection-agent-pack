@@ -19,6 +19,8 @@ public sealed class CliArgs
     public string? Compress { get; private set; }
     /// <summary>License server base URL embedded into each encoded file header.</summary>
     public string? LicenseServerUrl { get; private set; }
+    /// <summary>When true, PHP source is obfuscated (comments stripped, vars renamed) before encryption.</summary>
+    public bool Obfuscate { get; private set; }
 
     public static CliArgs Parse(string[] args)
     {
@@ -61,6 +63,9 @@ public sealed class CliArgs
                 case "--license-server":
                     result.LicenseServerUrl = args[++i].Trim();
                     break;
+                case "--obfuscate":
+                    result.Obfuscate = true;
+                    break;
                 case "--verbose":
                 case "-v":
                     result.Verbose = true;
@@ -85,6 +90,7 @@ public sealed class CliArgs
                                [--config <path> --project <key>]
                                [--mmignore <file>]
                                [--compress lz4|none]
+                               [--obfuscate]
                                [--dev]
                                [--dry-run]
                                [--verbose]
@@ -96,6 +102,8 @@ public sealed class CliArgs
           --mmignore <file>    Globale .mmignore-Datei (gilt vor verzeichnislokalen Dateien).
           --compress lz4       LZ4-Komprimierung vor AES-256-GCM (spart Speicherplatz bei großem PHP-Code).
           --compress none      Keine Komprimierung (Standard).
+          --obfuscate          PHP-Quellcode vor der Verschlüsselung obfuszieren:
+                               Kommentare entfernen, Variablennamen kürzen.
           --license-server <url>  License-Server-URL direkt in jede kodierte Datei einbetten.
                                Überschreibt mmloader.license_server (INI) pro Datei.
                                Ermöglicht mehrere Lizenzserver auf einer PHP-Instanz.

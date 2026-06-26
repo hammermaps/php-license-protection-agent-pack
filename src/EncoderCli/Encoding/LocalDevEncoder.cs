@@ -20,7 +20,8 @@ public sealed class LocalDevEncoder
         bool verbose,
         bool dryRun,
         string? compression = null,
-        string? licenseServerUrl = null)
+        string? licenseServerUrl = null,
+        bool obfuscate = false)
     {
         sourceRoot = Path.GetFullPath(sourceRoot);
         outputRoot = Path.GetFullPath(outputRoot);
@@ -71,6 +72,12 @@ public sealed class LocalDevEncoder
 
             // action == Encode
             var plain = await File.ReadAllBytesAsync(absPath);
+            if (obfuscate)
+            {
+                var text = System.Text.Encoding.UTF8.GetString(plain);
+                text = PhpObfuscator.Obfuscate(text);
+                plain = System.Text.Encoding.UTF8.GetBytes(text);
+            }
             var fileId = "file_" + Hashing.ShortSha256(rel);
             var pathHash = "sha256:" + Hashing.Sha256Hex(rel);
             var plainHash = "sha256:" + Hashing.Sha256Hex(plain);

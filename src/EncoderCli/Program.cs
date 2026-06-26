@@ -76,7 +76,8 @@ try
                     sourceDir, outputDir, mmIgnore, signing,
                     cli.Verbose, cli.DryRun,
                     compression: cli.Compress,
-                    licenseServerUrl: cli.LicenseServerUrl);
+                    licenseServerUrl: cli.LicenseServerUrl,
+                    obfuscate: cli.Obfuscate);
             }
             else
             {
@@ -95,6 +96,10 @@ try
                 // --compress CLI flag overrides config value
                 if (cli.Compress != null)
                     config.Defaults.Compression = cli.Compress;
+
+                // --obfuscate CLI flag overrides config value
+                if (cli.Obfuscate)
+                    config.Defaults.Obfuscate = true;
 
                 // --license-server CLI flag overrides the config URL embedded in headers
                 if (cli.LicenseServerUrl != null)

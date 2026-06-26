@@ -67,6 +67,9 @@ public sealed class DefaultOptions
     /// Useful to enforce project-wide exclusions independently of the source tree.
     /// </summary>
     public string? MmIgnoreFile { get; set; }
+
+    /// <summary>When true, PHP source is obfuscated (comments stripped, vars renamed) before encryption.</summary>
+    public bool Obfuscate { get; set; } = false;
 }
 
 /// <summary>
