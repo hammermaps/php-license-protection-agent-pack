@@ -39,7 +39,9 @@ Offset  Größe   Inhalt
 16+N    Rest    Binary Ciphertext (AES-256-GCM)
 ```
 
-Header-Felder: `projectId`, `customerId`, `licenseId`, `buildId`, `fileId`, `relativePath`, `pathHash`, `plainHash`, `cipherHash`, `algorithm`, `kdf`, `nonce`, `tag`, `manifestHash`, `signature`.
+Pflichtfelder: `projectId`, `customerId`, `licenseId`, `buildId`, `fileId`, `relativePath`, `pathHash`, `plainHash`, `cipherHash`, `algorithm`, `kdf`, `nonce`, `tag`, `manifestHash`, `signature`.
+
+Optionale Felder: `compression` (`"lz4"` oder weggelassen = keine Komprimierung). Rückwärtskompatibel: fehlendes Feld bedeutet unkomprimiert.
 
 **Signaturumfang:** `buildId + ":" + fileId + ":" + cipherHash` (ECDSA-P256 DER, SHA-256). Nicht nur den Header signieren – sonst ist der Ciphertext austauschbar.
 
@@ -49,6 +51,7 @@ Header-Felder: `projectId`, `customerId`, `licenseId`, `buildId`, `fileId`, `rel
 
 | Zweck | Algorithmus |
 |---|---|
+| Optionale Vorverarbeitung | LZ4-Block (HC, eingebettet via `vendor/lz4`) |
 | Dateiverschlüsselung | AES-256-GCM |
 | Hashing | SHA-256 |
 | Key Derivation | HKDF-SHA256 |
@@ -76,6 +79,9 @@ repo/
 │  ├─ EncoderCli/                ← .NET CLI Encoder (AES-256-GCM + ECDSA-P256)
 │  ├─ EncoderCli.Tests/          ← 12 Glob/FileSelector-Tests
 │  └─ PhpDecoderLoader/          ← Zend Extension (vollständig implementiert)
+│     └─ vendor/
+│        ├─ cjson/               ← eingebetteter JSON-Parser
+│        └─ lz4/                 ← eingebetteter LZ4-Block-Decompressor
 ├─ tests/
 │  ├─ php-demo/                  ← kleines Demo-PHP-Projekt (Klartext)
 │  ├─ decoder-loader/            ← Decoder-Tests (Weeks 1–4)
@@ -145,6 +151,7 @@ PHP require src/App/Application.php
   → Loader verifiziert Lease-Signatur (ECDSA-P256)
   → fileKey = HKDF(buildKey, buildId:fileId:pathHash)
   → AES-256-GCM entschlüsseln im RAM
+  → wenn header.compression == "lz4": LZ4_decompress_safe() im RAM
   → PHP-Code an Zend Engine übergeben
   → RAM nullen (explicit_bzero)
   → OPcache speichert Opcodes; execute_ex-Guard schützt gecachte Ausführung
@@ -196,7 +203,7 @@ scripts/linux/build-all.sh
 
 ```bash
 dotnet test src/LicenseServer.Tests/    # 5 In-Process-Integrationstests (SQLite)
-dotnet test src/EncoderCli.Tests/       # 12 Glob/FileSelector-Tests
+dotnet test src/EncoderCli.Tests/       # 40 Tests (Glob + MmIgnore + Compression)
 ```
 
 ### Decoder-Tests (Weeks 1–4)
@@ -314,7 +321,7 @@ Key routing rules:
 
 ---
 
-## Implementierungsstand (Stand 2026-06-26)
+## Implementierungsstand (Stand 2026-06-26, zuletzt aktualisiert 2026-06-26)
 
 ### LicenseServer (`src/LicenseServer/`) — **funktional, Demo-Krypto**
 
@@ -369,17 +376,28 @@ Key routing rules:
 
 | Datei | Inhalt |
 |---|---|
-| `Program.cs` | Dispatcher für `validate`/`encode`/`manifest`/`clean` |
-| `CliArgs.cs` | Argument-Parser (`--config`, `--project`, `--verbose`) |
-| `Configuration/EncoderConfig.cs` | Vollständiges Config-Modell (JSON + XML, Multi-Projekt) |
+| `Program.cs` | Dispatcher für `validate`/`encode`/`manifest`/`clean`/`encode-dir` |
+| `CliArgs.cs` | Argument-Parser inkl. `--source`, `--output`, `--mmignore`, `--compress`, `--dev`, `--dry-run` |
+| `Configuration/EncoderConfig.cs` | Config-Modell (JSON + XML); `DefaultOptions.Compression` für LZ4 |
 | `Configuration/EncoderConfigLoader.cs` | JSON via `System.Text.Json`, XML via `XDocument` |
 | `Encoding/CryptoPrimitives.cs` | HKDF-SHA256 (Salt `SHA-256("MMProtect-HKDF-v1")`) + SHA-256-Hashing |
 | `Encoding/FileSelector.cs` | Glob-Matching mit `**`-Support, include/exclude; `exclude` gilt auch für `copyPlain` |
-| `Encoding/MmencContainer.cs` | AES-256-GCM Container, MMENC1-Format, ECDSA-P256-Signatur (Fallback SHA-256 ohne Key) |
-| `Encoding/ProjectEncoder.cs` | Vollständiger Encoding-Ablauf (Upsert→Build→Encrypt→Sign) |
+| `Encoding/MmIgnoreRules.cs` | `.mmignore`-Parser + `MmIgnoreRuleSet.Evaluate()` (gitignore-Semantik, Cascade) |
+| `Encoding/MmencContainer.cs` | AES-256-GCM Container, MMENC1-Format, LZ4-Komprimierung, ECDSA-P256-Signatur |
+| `Encoding/ProjectEncoder.cs` | Vollständiger Encoding-Ablauf (Upsert→Build→Encrypt→Sign), `.mmignore`-Unterstützung |
+| `Encoding/LocalDevEncoder.cs` | Dev-Modus ohne License Server: zufälliger Build-Key, `dev-buildkey.b64` |
 | `Server/LicenseServerClient.cs` | HTTP-Client gegen License Server mit Bearer-Token |
 
-**Encoding-Ablauf:** Kunde/Projekt/Lizenz upsert → Build starten → Dateien per Glob selektieren → AES-256-GCM verschlüsseln → ECDSA-P256 signieren → Hashes registrieren → Manifest signieren → `.mmprotect/manifest.json` + `.mmprotect/license.json` schreiben.
+**Encoding-Ablauf:** Kunde/Projekt/Lizenz upsert → Build starten → Dateien per Glob oder `.mmignore` selektieren → optional LZ4-komprimieren → AES-256-GCM verschlüsseln → ECDSA-P256 signieren → Hashes registrieren → Manifest signieren → `.mmprotect/manifest.json` + `.mmprotect/license.json` schreiben.
+
+**LZ4-Komprimierung:** optionales `"compression": "lz4"` in `DefaultOptions` (Config) oder `--compress lz4` (CLI). Komprimiert Klartext-PHP mit LZ4-Block (HC) vor AES-GCM. Format im Ciphertext: `[4-Byte-LE-Originalgröße][LZ4-Blockdaten]`. Aktivierung spart typisch 40–60 % bei PHP-Code. Backward-kompatibel: fehlendes Feld = keine Komprimierung.
+
+**`encode-dir`-Befehl:** Verzeichnis-basierte Verschlüsselung mit optionalem `.mmignore`-Support.
+- `--dev`: kein License Server, schreibt `dev-buildkey.b64`
+- `--config + --project`: Produktionsmodus mit License Server
+- `--mmignore <file>`: globale `.mmignore`-Datei
+- `--compress lz4|none`: LZ4-Komprimierung aktivieren/deaktivieren
+- `--dry-run`: nur Plan ausgeben, nichts schreiben
 
 **Bekannte Lücken / TODO:**
 
@@ -388,7 +406,7 @@ Key routing rules:
 | `ManifestHash` in per-Datei-Header bleibt `"pending"` (zweiter Schreibdurchlauf fehlt) | HOCH |
 | Keine PHP-Syntax-Prüfung vor Verschlüsselung | NIEDRIG |
 
-**Tests:** `EncoderCli.Tests/GlobTests.cs` – **12 Tests** (Glob-Matching + FileSelector). Alle 12 bestehen.
+**Tests:** `EncoderCli.Tests/` – **40 Tests** (12 Glob/FileSelector + 22 MmIgnore + 6 Compression). Alle 40 bestehen.
 
 ---
 
@@ -399,10 +417,11 @@ Key routing rules:
 | Datei | Inhalt |
 |---|---|
 | `php_mmloader.h` | Header, Versionskonstante `0.1.0` |
-| `config.m4` | Linux phpize-Build-Config, linkt `-lssl -lcrypto -lcurl` |
+| `config.m4` | Linux phpize-Build-Config, linkt `-lssl -lcrypto -lcurl`; kompiliert vendor/lz4 |
 | `config.w32` | Windows PHP-SDK-Build-Config (Skeleton) |
-| `mmloader.c` | Vollständige Zend Extension |
+| `mmloader.c` | Vollständige Zend Extension inkl. LZ4-Dekomprimierung |
 | `vendor/cjson/cJSON.{c,h}` | Eingebetteter JSON-Parser |
+| `vendor/lz4/lz4_decompress.{c,h}` | Eingebetteter LZ4-Block-Decompressor (kein `liblz4-dev` nötig) |
 
 **Implementierter Funktionsumfang:**
 
@@ -418,8 +437,9 @@ Key routing rules:
 | Lease-Signatur verifizieren (ECDSA-P256) | ✓ |
 | HKDF-SHA256 per-Datei-Key ableiten | ✓ |
 | AES-256-GCM entschlüsseln (OpenSSL EVP) | ✓ |
+| LZ4-Dekomprimierung nach AES-GCM (wenn `compression: "lz4"`) | ✓ |
 | Klartext als `zend_string` an Zend Engine übergeben | ✓ |
-| RAM nach Entschlüsselung nullen (`explicit_bzero`) | ✓ |
+| RAM nach Entschlüsselung nullen (`explicit_bzero`, inkl. LZ4-Buffer) | ✓ |
 | Lease-Cache lokal speichern (Modus 0600) | ✓ |
 | Offline-Grace-Logik (graceUntil) | ✓ |
 | `op_array` als geschützt markieren | ✓ |
@@ -447,6 +467,27 @@ scripts/linux/build-decoder-php85.sh
 | E2E: OPcache + mmloader | ✓ |
 | E2E: PHP 8.5 | SKIP (mmloader-php85.so nicht gebaut; `sudo apt install php8.5-dev` + `scripts/linux/build-decoder-php85.sh`) |
 
+### Demo-Projekt-Tests (`tests/php-demo/run-demo-test.sh`)
+
+| Test | Inhalt | Status |
+|---|---|---|
+| 1 | Klartext-PHP ausführen + Smoke-Test | ✓ |
+| 2 | encode-dir (Dev-Modus, .mmignore) | ✓ |
+| 3 | MMENC1-Magic + vendor Klartext | ✓ |
+| 4 | Ausführung mit mmloader (PHP 8.4, Dev-Modus) | ✓ |
+| 5 | Smoke-Test verschlüsselte Anwendung | ✓ |
+| 6 | mmloader + OPcache (PHP 8.4) | ✓ |
+| 7 | PHP 8.5 (optional) | SKIP |
+| 8 | Dry-Run erzeugt keinen Output | ✓ |
+| 9 | .mmignore Ausschluss | ✓ |
+| 10 | Klartext-PHP mit aktivem mmloader | ✓ |
+| 11 | LZ4-Komprimierung: encode mit `--compress lz4` | ✓ |
+| 12 | LZ4: Header-Feld `"compression":"lz4"` + Rückwärtskompatibilität | ✓ |
+| 13 | LZ4: Ausführung + Smoke-Test (PHP 8.4, Dev-Modus) | ✓ |
+| 14 | LZ4 + OPcache (PHP 8.4) | ✓ |
+
+**Ergebnis:** 27/27 bestanden, 1 Skip (PHP 8.5)
+
 ---
 
 ### Gesamtübersicht Reifegrad
@@ -457,5 +498,6 @@ scripts/linux/build-decoder-php85.sh
 | Encoder CLI | Vollständig lauffähig | ManifestHash-Update nach Encoding-Durchlauf |
 | PHP Decoder/Loader | Vollständig implementiert | – |
 | LicenseServer.Tests | 5/5 echte Integrationstests | Mehr Fehlerpfad-Tests (abgelaufene Lizenz, Revocation) |
-| EncoderCli.Tests | 12/12 Glob/FileSelector | Crypto-Roundtrip-Tests |
+| EncoderCli.Tests | 40/40 (Glob + MmIgnore + Compression) | – |
 | E2E-Integrationstest | 7/7 (PHP 8.5 skip) | PHP 8.5: `sudo apt install php8.5-dev` + build |
+| Demo-Projekt-Tests | 27/27 (PHP 8.5 skip) | PHP 8.5: siehe oben |
