@@ -51,6 +51,7 @@ try
             // Load .mmignore rule set from source tree
             var mmIgnore = MmIgnoreRuleSet.LoadFromSourceRoot(sourceDir, cli.MmIgnoreFile);
 
+#if MMPROTECT_DEV_BUILD
             if (cli.DevMode || string.IsNullOrEmpty(GetConfigPathIfExists(cli)))
             {
                 // === Dev mode: no license server ===
@@ -80,6 +81,7 @@ try
                     obfuscate: cli.Obfuscate);
             }
             else
+#endif
             {
                 // === Production mode: use license server from config ===
                 var config = EncoderConfigLoader.Load(cli.ConfigPath);
@@ -155,5 +157,7 @@ catch (Exception ex)
     return 1;
 }
 
+#if MMPROTECT_DEV_BUILD
 static string? GetConfigPathIfExists(CliArgs cli)
     => File.Exists(cli.ConfigPath) ? cli.ConfigPath : null;
+#endif

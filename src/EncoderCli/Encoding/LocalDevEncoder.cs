@@ -4,11 +4,12 @@ using System.Text.Json;
 
 namespace MmProtect.EncoderCli.Encoding;
 
+#if MMPROTECT_DEV_BUILD
 /// <summary>
 /// Encodes a directory without a license server. Generates a local random build key
 /// and writes dev-buildkey.b64 to the output .mmprotect/ directory.
 ///
-/// FOR DEVELOPMENT AND TESTING ONLY — do not use in production.
+/// FOR DEVELOPMENT AND TESTING ONLY — compiled out in release builds.
 /// </summary>
 public sealed class LocalDevEncoder
 {
@@ -189,3 +190,4 @@ public sealed class LocalDevEncoder
         Console.WriteLine(new string('-', 60));
     }
 }
+#endif // MMPROTECT_DEV_BUILD

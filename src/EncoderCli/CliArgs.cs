@@ -14,7 +14,9 @@ public sealed class CliArgs
     public string? OutputDir { get; private set; }
     public string? MmIgnoreFile { get; private set; }
     public bool DryRun { get; private set; }
+#if MMPROTECT_DEV_BUILD
     public bool DevMode { get; private set; }
+#endif
     /// <summary>Compression algorithm: null/"none" = off, "lz4" = LZ4 block (HC).</summary>
     public string? Compress { get; private set; }
     /// <summary>License server base URL embedded into each encoded file header.</summary>
@@ -54,9 +56,11 @@ public sealed class CliArgs
                 case "--dry-run":
                     result.DryRun = true;
                     break;
+#if MMPROTECT_DEV_BUILD
                 case "--dev":
                     result.DevMode = true;
                     break;
+#endif
                 case "--compress":
                     result.Compress = args[++i].Trim().ToLowerInvariant();
                     break;
@@ -91,13 +95,10 @@ public sealed class CliArgs
                                [--mmignore <file>]
                                [--compress lz4|none]
                                [--obfuscate]
-                               [--dev]
                                [--dry-run]
                                [--verbose]
 
         encode-dir Modi:
-          --dev                Lokaler Dev-Modus: zufälliger Build-Key, kein License Server.
-                               Schreibt .mmprotect/dev-buildkey.b64 in den Output.
           --config + --project Produktionsmodus: License Server aus Config.
           --mmignore <file>    Globale .mmignore-Datei (gilt vor verzeichnislokalen Dateien).
           --compress lz4       LZ4-Komprimierung vor AES-256-GCM (spart Speicherplatz bei großem PHP-Code).
@@ -117,5 +118,12 @@ public sealed class CliArgs
           + composer.json      Als Klartext kopieren
           !wichtig.php         Einschluss erzwingen (Ausschluss aufheben)
         """);
+#if MMPROTECT_DEV_BUILD
+        Console.WriteLine("""
+        Dev-Build-Optionen (nur in Debug-Build verfügbar):
+          --dev                Lokaler Dev-Modus: zufälliger Build-Key, kein License Server.
+                               Schreibt .mmprotect/dev-buildkey.b64 in den Output.
+        """);
+#endif
     }
 }

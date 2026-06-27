@@ -197,17 +197,38 @@ sudo apt-get install -y build-essential autoconf pkg-config \
 sudo apt-get install -y php8.5-dev php8.5-cli php8.5-opcache
 ```
 
+### Build-Modi: Release vs. Dev
+
+Das Projekt verwendet **`MMPROTECT_DEV_BUILD`** als zentrales Build-Flag:
+
+| Flag | Decoder (C) | Encoder (.NET) | Enthält Dev-Code? |
+|---|---|---|---|
+| Release | `./configure --enable-mmloader` | `dotnet publish -c Release` | Nein — kein Demo-Code |
+| Dev | `./configure --enable-mmloader --enable-mmloader-dev` | `dotnet publish -c Debug` | Ja |
+
+Im **Release-Build**:
+- `mmloader.dev_mode`, `mmloader.dev_buildkey` INI-Einträge existieren nicht
+- Kein Demo-HMAC-Fallback, kein SHA-256-Fallback für Dateisignaturen
+- `mmloader.signing_public_key_file` ist **Pflicht** — ohne es startet die Extension nicht
+- `--dev`-Flag und `LocalDevEncoder` sind aus dem Encoder-Binary kompiliert
+
 ### Alles bauen
 
 ```bash
-scripts/linux/build-all.sh
+scripts/linux/build-all.sh          # Release-Build (Standard, kein Dev-Code)
+```
+
+Dev-Builds (nur für Entwicklung und Tests):
+```bash
+scripts/linux/build-decoder-dev.sh  # mmloader-dev.so (mit MMPROTECT_DEV_BUILD)
+scripts/linux/build-encoder-dev.sh  # mmencoder-dev (mit --dev-Flag)
 ```
 
 ### .NET-Tests
 
 ```bash
 dotnet test src/LicenseServer.Tests/    # 13 In-Process-Integrationstests (SQLite, inkl. 8 Security-Tests)
-dotnet test src/EncoderCli.Tests/       # 40 Tests (Glob + MmIgnore + Compression)
+dotnet test src/EncoderCli.Tests/       # 57 Tests (Glob + MmIgnore + Compression + Obfuscator)
 ```
 
 ### Decoder-Tests (Weeks 1–4)

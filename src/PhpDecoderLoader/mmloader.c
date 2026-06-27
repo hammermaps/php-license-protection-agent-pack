@@ -60,7 +60,9 @@ ZEND_BEGIN_MODULE_GLOBALS(mmloader)
     char      *license_file;
     char      *cache_dir;
     char      *protected_magic;
+#ifdef MMPROTECT_DEV_BUILD
     char      *dev_buildkey;
+#endif
     /* Week 4: path to ECDSA-P256 PEM public key for signature verification */
     char      *signing_public_key_file;
     zend_long  connect_timeout_ms;
@@ -68,8 +70,10 @@ ZEND_BEGIN_MODULE_GLOBALS(mmloader)
     zend_long  lease_refresh_seconds;
     zend_long  offline_grace_seconds;
     zend_bool  require_signature;
+#ifdef MMPROTECT_DEV_BUILD
     zend_bool  dev_mode;
     zend_bool  dev_mode_warned;
+#endif
     /* Per-process feature set from last successful lease response */
     HashTable *lease_features;  /* persistent; NULL = no features */
     /* Per-process lease cache (in-RAM) */
@@ -91,7 +95,9 @@ ZEND_DECLARE_MODULE_GLOBALS(mmloader)
 
 /* Pre-computed static secrets (initialised in MINIT) */
 static unsigned char s_hkdf_salt[32];
+#ifdef MMPROTECT_DEV_BUILD
 static unsigned char s_demo_signing_key[32];
+#endif
 static char          s_machine_fingerprint[65];
 
 /* Week 4: ECDSA-P256 public key (NULL = use SHA-256/HMAC demo fallback) */
@@ -117,8 +123,10 @@ PHP_INI_BEGIN()
         OnUpdateString, cache_dir, zend_mmloader_globals, mmloader_globals)
     STD_PHP_INI_ENTRY("mmloader.protected_magic", "MMENC1", PHP_INI_SYSTEM,
         OnUpdateString, protected_magic, zend_mmloader_globals, mmloader_globals)
+#ifdef MMPROTECT_DEV_BUILD
     STD_PHP_INI_ENTRY("mmloader.dev_buildkey", "", PHP_INI_SYSTEM,
         OnUpdateString, dev_buildkey, zend_mmloader_globals, mmloader_globals)
+#endif
     STD_PHP_INI_ENTRY("mmloader.signing_public_key_file", "", PHP_INI_SYSTEM,
         OnUpdateString, signing_public_key_file, zend_mmloader_globals, mmloader_globals)
     STD_PHP_INI_ENTRY("mmloader.connect_timeout_ms", "3000", PHP_INI_SYSTEM,
@@ -131,8 +139,10 @@ PHP_INI_BEGIN()
         OnUpdateLong, offline_grace_seconds, zend_mmloader_globals, mmloader_globals)
     STD_PHP_INI_BOOLEAN("mmloader.require_signature", "1", PHP_INI_SYSTEM,
         OnUpdateBool, require_signature, zend_mmloader_globals, mmloader_globals)
+#ifdef MMPROTECT_DEV_BUILD
     STD_PHP_INI_BOOLEAN("mmloader.dev_mode", "0", PHP_INI_SYSTEM,
         OnUpdateBool, dev_mode, zend_mmloader_globals, mmloader_globals)
+#endif
 PHP_INI_END()
 
 static void php_mmloader_init_globals(zend_mmloader_globals *g)
@@ -143,15 +153,19 @@ static void php_mmloader_init_globals(zend_mmloader_globals *g)
     g->license_file         = NULL;
     g->cache_dir            = NULL;
     g->protected_magic      = NULL;
+#ifdef MMPROTECT_DEV_BUILD
     g->dev_buildkey         = NULL;
+#endif
     g->signing_public_key_file = NULL;
     g->connect_timeout_ms   = 3000;
     g->request_timeout_ms   = 5000;
     g->lease_refresh_seconds  = 3600;
     g->offline_grace_seconds  = 604800;
     g->require_signature    = 1;
+#ifdef MMPROTECT_DEV_BUILD
     g->dev_mode             = 0;
     g->dev_mode_warned      = 0;
+#endif
     g->lease_features       = NULL;
     memset(g->cached_runtime_key, 0, sizeof(g->cached_runtime_key));
     g->has_cached_key         = 0;
@@ -252,6 +266,7 @@ done:
     return ok;
 }
 
+#ifdef MMPROTECT_DEV_BUILD
 static int mmloader_hmac_sha256_demo(const char *data, size_t data_len,
                                       unsigned char *hmac_out)
 {
@@ -261,6 +276,7 @@ static int mmloader_hmac_sha256_demo(const char *data, size_t data_len,
                 (const unsigned char *)data, data_len,
                 hmac_out, &len) != NULL;
 }
+#endif /* MMPROTECT_DEV_BUILD */
 
 /* ====================================================================
  * Week 4: ECDSA-P256 signature verification
@@ -352,13 +368,15 @@ static int mmloader_verify_file_signature(cJSON *root, const char *filename)
         || !cJSON_IsString(j_fileId) || !cJSON_IsString(j_cipherHash))
         return 0;
 
-    /* Skip legacy test placeholder */
+#ifdef MMPROTECT_DEV_BUILD
+    /* Skip legacy test placeholder (dev build only) */
     if (strncmp(j_sig->valuestring, "dev-", 4) == 0
         || strncmp(j_sig->valuestring, "sha256-placeholder", 18) == 0) {
         php_error_docref(NULL, E_NOTICE,
             "MMENC: skipping placeholder signature in %s (dev build)", filename);
         return 1;
     }
+#endif
 
     size_t data_len = strlen(j_buildId->valuestring) + 1 +
                       strlen(j_fileId->valuestring)  + 1 +
@@ -369,18 +387,29 @@ static int mmloader_verify_file_signature(cJSON *root, const char *filename)
 
     int ok;
     if (s_signing_public_key) {
-        /* Week 4: ECDSA-P256 verification */
+        /* ECDSA-P256 verification */
         ok = mmloader_ecdsa_verify(s_signing_public_key,
                                     (const unsigned char *)data, data_len,
                                     j_sig->valuestring);
+#ifdef MMPROTECT_DEV_BUILD
     } else {
-        /* Demo fallback: SHA-256 hash comparison */
+        /* Dev fallback: SHA-256 hash comparison */
         unsigned char hash[32];
         unsigned int  hash_len = 0;
         EVP_Digest(data, data_len, hash, &hash_len, EVP_sha256(), NULL);
         char *expected_b64 = mmloader_base64_encode(hash, 32);
         ok = (expected_b64 && strcmp(expected_b64, j_sig->valuestring) == 0);
         if (expected_b64) free(expected_b64);
+#else
+    } else {
+        /* Release: signing key is mandatory — hard error */
+        ZEND_SECURE_ZERO(data, data_len);
+        efree(data);
+        php_error_docref(NULL, E_ERROR,
+            "MMENC: no signing public key configured — file signature cannot be "
+            "verified (mmloader.signing_public_key_file required in release build)");
+        return 0;
+#endif
     }
 
     ZEND_SECURE_ZERO(data, data_len);
@@ -446,7 +475,8 @@ static int mmloader_verify_lease_signature(cJSON *resp, const char *build_id)
         return ok;
     }
 
-    /* Demo HMAC-SHA256 fallback (non-blocking) */
+#ifdef MMPROTECT_DEV_BUILD
+    /* Dev fallback: HMAC-SHA256 (non-blocking) */
     unsigned char hmac[32];
     int hmac_ok = mmloader_hmac_sha256_demo(data, data_len, hmac);
     ZEND_SECURE_ZERO(data, data_len);
@@ -457,13 +487,21 @@ static int mmloader_verify_lease_signature(cJSON *resp, const char *build_id)
     if (!expected_b64) return 0;
 
     if (strcmp(expected_b64, j_sig->valuestring) != 0) {
-        /* Warn but do not block — demo crypto edge case */
         php_error_docref(NULL, E_NOTICE,
-            "MMENC: lease HMAC signature mismatch (demo crypto — configure "
+            "MMENC: lease HMAC signature mismatch (dev crypto — configure "
             "mmloader.signing_public_key_file for ECDSA-P256)");
     }
     free(expected_b64);
-    return 1; /* non-blocking for demo crypto */
+    return 1; /* non-blocking in dev build */
+#else
+    /* Release: ECDSA key is mandatory */
+    ZEND_SECURE_ZERO(data, data_len);
+    efree(data);
+    php_error_docref(NULL, E_WARNING,
+        "MMENC: no signing public key — lease signature cannot be verified "
+        "(mmloader.signing_public_key_file required in release build)");
+    return 0;
+#endif
 }
 
 /* ====================================================================
@@ -665,10 +703,12 @@ static int mmloader_post_lease(const char *body, const char *build_id,
     curl_easy_setopt(curl, CURLOPT_WRITEDATA,     &resp);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)MMLOADER_G(connect_timeout_ms));
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,        (long)MMLOADER_G(request_timeout_ms));
+#ifdef MMPROTECT_DEV_BUILD
     if (MMLOADER_G(dev_mode)) {
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
     }
+#endif
 
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);
@@ -767,6 +807,7 @@ cleanup:
     return ok;
 }
 
+#ifdef MMPROTECT_DEV_BUILD
 static int mmloader_read_dev_buildkey(unsigned char *key_out)
 {
     const char *path = MMLOADER_G(dev_buildkey);
@@ -793,6 +834,7 @@ static int mmloader_read_dev_buildkey(unsigned char *key_out)
             "MMENC: dev_buildkey must be Base64 of exactly 32 bytes");
     return ok;
 }
+#endif /* MMPROTECT_DEV_BUILD */
 
 static int mmloader_fetch_lease(const char *build_id, unsigned char *key_out,
                                  const char *server_override)
@@ -899,17 +941,23 @@ static int mmloader_get_or_fetch_runtime_key(const char *build_id,
         }
     }
 
-    /* 4. dev_buildkey fallback */
+#ifdef MMPROTECT_DEV_BUILD
+    /* 4. dev_buildkey fallback (dev build only) */
     const char *dbk = MMLOADER_G(dev_buildkey);
     if (dbk && dbk[0]) {
         ZEND_SECURE_ZERO(disk_key, sizeof(disk_key));
         return mmloader_read_dev_buildkey(key_out);
     }
+#endif
 
     ZEND_SECURE_ZERO(disk_key, sizeof(disk_key));
     php_error_docref(NULL, E_WARNING,
         "MMENC: no runtime key available "
+#ifdef MMPROTECT_DEV_BUILD
         "(server unreachable, no disk cache in grace, no dev_buildkey)");
+#else
+        "(server unreachable, no disk cache within grace period)");
+#endif
     return 0;
 }
 
@@ -1279,19 +1327,21 @@ PHP_MINIT_FUNCTION(mmloader)
         return FAILURE;
     }
 
-    /* Pre-compute demo signing key */
+#ifdef MMPROTECT_DEV_BUILD
+    /* Pre-compute demo signing key (dev build only) */
     unsigned int sk_len = 0;
     if (!EVP_Digest("mmprotect-dev-signing-key",
                     strlen("mmprotect-dev-signing-key"),
                     s_demo_signing_key, &sk_len, EVP_sha256(), NULL) || sk_len != 32) {
-        php_error(E_CORE_ERROR, "MMENC: signing key initialisation failed");
+        php_error(E_CORE_ERROR, "MMENC: demo signing key initialisation failed");
         return FAILURE;
     }
+#endif
 
     /* Compute machine fingerprint once */
     mmloader_compute_machine_fingerprint();
 
-    /* Week 4: load ECDSA-P256 public key if configured */
+    /* Load ECDSA-P256 public key */
     const char *pubkey_path = MMLOADER_G(signing_public_key_file);
     if (pubkey_path && pubkey_path[0]) {
         FILE *kfp = fopen(pubkey_path, "r");
@@ -1299,14 +1349,36 @@ PHP_MINIT_FUNCTION(mmloader)
             s_signing_public_key = PEM_read_PUBKEY(kfp, NULL, NULL, NULL);
             fclose(kfp);
             if (!s_signing_public_key) {
+#ifdef MMPROTECT_DEV_BUILD
                 php_error(E_CORE_WARNING,
                     "MMENC: failed to load signing public key from %s "
                     "(falling back to SHA-256 demo verification)", pubkey_path);
+#else
+                php_error(E_CORE_ERROR,
+                    "MMENC: failed to load signing public key from %s "
+                    "(release build cannot start without a valid signing key)", pubkey_path);
+                return FAILURE;
+#endif
             }
         } else {
+#ifdef MMPROTECT_DEV_BUILD
             php_error(E_CORE_WARNING,
                 "MMENC: cannot open signing_public_key_file: %s", pubkey_path);
+#else
+            php_error(E_CORE_ERROR,
+                "MMENC: cannot open signing_public_key_file: %s "
+                "(release build cannot start without a valid signing key)", pubkey_path);
+            return FAILURE;
+#endif
         }
+#ifndef MMPROTECT_DEV_BUILD
+    } else {
+        /* Release build: signing key is mandatory */
+        php_error(E_CORE_ERROR,
+            "MMENC: mmloader.signing_public_key_file is not configured "
+            "(required in release builds)");
+        return FAILURE;
+#endif
     }
 
     /* Initialise persistent protected-files set */
@@ -1389,8 +1461,10 @@ PHP_MSHUTDOWN_FUNCTION(mmloader)
     }
     curl_global_cleanup();
 
-    ZEND_SECURE_ZERO(s_hkdf_salt,          sizeof(s_hkdf_salt));
-    ZEND_SECURE_ZERO(s_demo_signing_key,   sizeof(s_demo_signing_key));
+    ZEND_SECURE_ZERO(s_hkdf_salt,           sizeof(s_hkdf_salt));
+#ifdef MMPROTECT_DEV_BUILD
+    ZEND_SECURE_ZERO(s_demo_signing_key,    sizeof(s_demo_signing_key));
+#endif
     ZEND_SECURE_ZERO(s_machine_fingerprint, sizeof(s_machine_fingerprint));
 
     UNREGISTER_INI_ENTRIES();
@@ -1403,11 +1477,13 @@ PHP_RINIT_FUNCTION(mmloader)
 #if defined(ZTS) && defined(COMPILE_DL_MMLOADER)
     ZEND_TSRMLS_CACHE_UPDATE();
 #endif
+#ifdef MMPROTECT_DEV_BUILD
     if (MMLOADER_G(dev_mode) && !MMLOADER_G(dev_mode_warned)) {
         php_error_docref(NULL, E_WARNING,
-            "MMENC mmloader: dev_mode is enabled — disable in production");
+            "MMENC mmloader: dev_mode is enabled — do not use in production");
         MMLOADER_G(dev_mode_warned) = 1;
     }
+#endif
     /* Proactive lease refresh: within 10 % of TTL → force re-fetch */
     if (MMLOADER_G(has_cached_key) && MMLOADER_G(cached_lease_expires) > 0) {
         time_t now      = time(NULL);
@@ -1428,14 +1504,23 @@ PHP_MINFO_FUNCTION(mmloader)
     php_info_print_table_row(2, "Version", PHP_MMLOADER_VERSION);
     php_info_print_table_row(2, "Magic",
         MMLOADER_G(protected_magic) ? MMLOADER_G(protected_magic) : "MMENC1");
+#ifdef MMPROTECT_DEV_BUILD
+    php_info_print_table_row(2, "Build", "dev");
     php_info_print_table_row(2, "Dev mode",
         MMLOADER_G(dev_mode) ? "on" : "off");
+#else
+    php_info_print_table_row(2, "Build", "release");
+#endif
     php_info_print_table_row(2, "Lease cache",
         MMLOADER_G(has_cached_key) ? "populated" : "empty");
     php_info_print_table_row(2, "Fingerprint",
         s_machine_fingerprint[0] ? s_machine_fingerprint : "(not computed)");
+#ifdef MMPROTECT_DEV_BUILD
     php_info_print_table_row(2, "Signing",
-        s_signing_public_key ? "ECDSA-P256" : "SHA-256 demo");
+        s_signing_public_key ? "ECDSA-P256" : "SHA-256 demo (no key configured)");
+#else
+    php_info_print_table_row(2, "Signing", "ECDSA-P256");
+#endif
     php_info_print_table_row(2, "execute_ex hook", "active");
     php_info_print_table_end();
     DISPLAY_INI_ENTRIES();
