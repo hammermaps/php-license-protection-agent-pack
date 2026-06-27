@@ -550,9 +550,14 @@ static void mmloader_cache_write(const char *build_id,
 
     int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd >= 0) {
-        (void)write(fd, json, strlen(json));
+        size_t  json_len = strlen(json);
+        ssize_t written  = write(fd, json, json_len);
         close(fd);
-        rename(tmp_path, path); /* POSIX-atomic */
+        if (written == (ssize_t)json_len) {
+            rename(tmp_path, path); /* POSIX-atomic — only on complete write */
+        } else {
+            unlink(tmp_path); /* discard partial/failed write */
+        }
     }
 
     ZEND_SECURE_ZERO(json, strlen(json));

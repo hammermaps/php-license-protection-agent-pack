@@ -104,26 +104,21 @@ Requirements: `php8.5-dev` installed (see Prerequisites).
 ### Unit/Integration tests (.NET)
 
 ```bash
-dotnet test src/LicenseServer/LicenseServer.Tests/ -v m
-dotnet test src/EncoderCli/EncoderCli.Tests/ -v m
+dotnet test src/LicenseServer.Tests/ -v m   # 41 Tests (33 SmokeTests + 8 CryptoTests)
+dotnet test src/EncoderCli.Tests/ -v m      # 57 Tests (Glob + MmIgnore + Compression + Obfuscator)
 ```
+
+All tests run against an in-process SQLite database via `WebApplicationFactory` — no external MySQL instance needed.
 
 ### Loader smoke tests (Weeks 1–4)
 
 Each week has its own test script in `tests/decoder-loader/`:
 
 ```bash
-# Week 1: MMENC1 format, basic decrypt
-bash tests/decoder-loader/run-tests-week1.sh
-
-# Week 2: HTTP lease against mock server
-bash tests/decoder-loader/run-tests-week2.sh
-
-# Week 3: Security gates (expiry, revocation, fingerprint)
-bash tests/decoder-loader/run-tests-week3.sh
-
-# Week 4: ECDSA-P256 signing, execute_ex OPcache guard
-bash tests/decoder-loader/run-tests-week4.sh
+bash tests/decoder-loader/run-tests.sh           # Week 1: MMENC1 format, basic decrypt
+bash tests/decoder-loader/run-tests-week2.sh     # Week 2: HTTP lease against mock server
+bash tests/decoder-loader/run-tests-week3.sh     # Week 3: Security gates (expiry, revocation)
+bash tests/decoder-loader/run-tests-week4.sh     # Week 4: ECDSA-P256, execute_ex OPcache guard
 ```
 
 ### Full end-to-end integration test
@@ -144,6 +139,21 @@ This test:
 9. Tests with PHP 8.5 (if mmloader-php85.so is present)
 
 Expected output: `7 passed, 0 failed` (PHP 8.5 skipped if not built).
+
+### Demo-Projekt tests
+
+```bash
+bash tests/php-demo/run-demo-test.sh
+# Expected: 31/31 passed (PHP 8.5 skip)
+```
+
+### Comprehensive test (36 phases)
+
+Full E2E test with local license server, SQLite, AES-256-KEK, ECDSA-P256, live HTTP lease, OPcache, APCu, LZ4, obfuscation, hostname/IP/domain constraints, revocation, rate limiting, Admin API, concurrent execution, and MMENC1 format inspection.
+
+```bash
+bash tests/comprehensive/run-comprehensive-test.sh [--ext84 PATH] [--ext85 PATH]
+```
 
 ### All tests
 

@@ -77,9 +77,9 @@ fileKey = HKDF-SHA256(IKM=buildKey, salt=salt, info=buildId+":"+fileId+":"+pathH
 repo/
 ├─ src/
 │  ├─ LicenseServer/             ← ASP.NET Core Minimal API (MySQL + SQLite)
-│  ├─ LicenseServer.Tests/       ← 5 In-Process-Integrationstests (SQLite)
+│  ├─ LicenseServer.Tests/       ← 41 Integrationstests (SmokeTests + CryptoTests)
 │  ├─ EncoderCli/                ← .NET CLI Encoder (AES-256-GCM + ECDSA-P256)
-│  ├─ EncoderCli.Tests/          ← 12 Glob/FileSelector-Tests
+│  ├─ EncoderCli.Tests/          ← 57 Tests (Glob + MmIgnore + Compression + Obfuscator)
 │  └─ PhpDecoderLoader/          ← Zend Extension (vollständig implementiert)
 │     └─ vendor/
 │        ├─ cjson/               ← eingebetteter JSON-Parser
@@ -227,7 +227,7 @@ scripts/linux/build-encoder-dev.sh  # mmencoder-dev (mit --dev-Flag)
 ### .NET-Tests
 
 ```bash
-dotnet test src/LicenseServer.Tests/    # 13 In-Process-Integrationstests (SQLite, inkl. 8 Security-Tests)
+dotnet test src/LicenseServer.Tests/    # 41 Tests (SmokeTests 33 + CryptoTests 8)
 dotnet test src/EncoderCli.Tests/       # 57 Tests (Glob + MmIgnore + Compression + Obfuscator)
 ```
 
@@ -313,6 +313,61 @@ cd tests/php-demo
 composer dump-autoload -o -a
 php public/index.php   # → "MMProtect Demo: protected project code executed"
 ```
+
+---
+
+## Comprehensive End-to-End Test
+
+`tests/comprehensive/` — vollständiger E2E-Test mit lokalem Lizenzserver und umfangreichem PHP-Projekt.
+
+### PHP-Projekt (`tests/comprehensive/php-project/`)
+
+Testet 90 PHP-Funktionen in 10 Kategorien:
+
+| Suite | Tests | Inhalt |
+|---|---|---|
+| Database (SQLite/PDO) | 8 | CREATE/INSERT/SELECT/UPDATE/DELETE/Transaction/Aggregate |
+| File System | 11 | Read/Write/Append/Copy/Rename/Glob/Binary/JSON/SplFileInfo |
+| OOP | 10 | Interface, Trait, Enum, Readonly, Named-Args, First-Class-Callable |
+| Closures & Functional | 10 | arrow fn, filter/map/reduce, bind, partial, memoize, pipe |
+| Generators | 7 | range, keys, send, yield-from, fibonacci, return-value |
+| String & Binary | 23 | mb_*, preg_*, sprintf, pack/unpack, hash, base64, JSON |
+| APCu Cache | 9 | store/fetch/exists/inc/dec/add/cas/cache_info |
+| OPcache Stats | 7 | enabled/memory_usage/statistics/configuration |
+| Network (cURL) | 5 | GET /health, curl_getinfo, curl_multi (3 parallel) |
+| MMProtect Protection | 6 | mmloader_loaded, mmprotect_has_feature(base/premium) |
+
+### Test-Phasen (`run-comprehensive-test.sh`)
+
+```bash
+tests/comprehensive/run-comprehensive-test.sh [--ext84 PATH] [--ext85 PATH]
+```
+
+| Phase | Inhalt |
+|---|---|
+| 0 | Prerequisite-Check (dotnet, sqlite3, curl, openssl, composer, php8.4) |
+| 1 | .NET-Build (LicenseServer + EncoderCli) |
+| 2 | ECDSA-P256-Schlüssel + AES-256-KEK generieren |
+| 3 | SQLite-Schema initialisieren |
+| 4 | LicenseServer starten (SQLite, ECDSA-signiert) |
+| 5 | Composer-Autoload + Plaintext-PHP-Smoke-Test |
+| 6 | Encode mit LZ4 + Obfuscation + licenseServer-URL-Einbettung |
+| 7 | Encode ohne Komprimierung (plain AES-256-GCM) |
+| 8 | PHP 8.4 Ausführung mit Live-HTTP-Lease (alle 10 Suites) |
+| 9 | OPcache + mmloader (2 Durchläufe, 2. nutzt gecachte Opcodes) |
+| 10 | APCu + mmloader |
+| 11 | Plain-AES-256-GCM-Build ausführen |
+| 12 | Offline-Grace (Server gestoppt, Lease aus Cache) |
+| 13 | Hostname-Constraint-Test: eigener Hostname → PASS |
+| 14 | Hostname-Constraint-Test: falscher Hostname → DENIED |
+| 15 | Build-Revocation via Admin-API → PHP blockiert |
+| 16 | Lizenz-Revocation via Admin-API |
+| 17 | Admin-API: Stats (licenses, builds, activations, leases) |
+| 18 | Admin-API: Audit-Log (Ereignistypen prüfen) |
+| 19 | Admin-API: API-Clients CRUD (Create/List/Delete/Soft-Delete) |
+| 20 | Admin-API: Aktivierungs-Management (Liste + Revoke) |
+| 21 | PHP 8.5 (SKIP wenn nicht installiert) |
+| 22 | SQLite-Cross-Checks (DB-Zustand validieren) |
 
 ---
 
@@ -408,7 +463,11 @@ scripts/linux/gen-signing-keys.sh /etc/mmprotect/
 | Keine PHP-Syntax-Prüfung vor Verschlüsselung (Encoder) | NIEDRIG |
 | `ManifestHash` in per-Datei-Header bleibt `"pending"` (zweiter Schreibdurchlauf fehlt) | HOCH (Encoder) |
 
-**Tests:** `LicenseServer.Tests/SmokeTests.cs` – **13 In-Process-Integrationstests** via `WebApplicationFactory` + SQLite (Health, Customer-Dedup, Project, voller Encoder-Flow, Runtime-Lease, + 8 Security-Tests). Alle 13 bestehen.
+**Tests:** `LicenseServer.Tests/` – **41 Tests** via `WebApplicationFactory` + SQLite:
+- `SmokeTests.cs` (33): Health, Customer-Dedup, Project, Encoder-Flow, Runtime-Lease, Security-Gates (Revocation, Constraints Hostname/Domain/IP, Admin-API-Coverage)
+- `CryptoTests.cs` (8): KEK AES-256-GCM roundtrip/nonce/wrong-key, ECDSA-P256 sign+verify, HMAC-Fallback
+
+Alle 41 bestehen.
 
 ---
 
@@ -448,7 +507,7 @@ scripts/linux/gen-signing-keys.sh /etc/mmprotect/
 | `ManifestHash` in per-Datei-Header bleibt `"pending"` (zweiter Schreibdurchlauf fehlt) | HOCH |
 | Keine PHP-Syntax-Prüfung vor Verschlüsselung | NIEDRIG |
 
-**Tests:** `EncoderCli.Tests/` – **40 Tests** (12 Glob/FileSelector + 22 MmIgnore + 6 Compression). Alle 40 bestehen.
+**Tests:** `EncoderCli.Tests/` – **57 Tests** (Glob/FileSelector + MmIgnore + Compression + Obfuscator). Alle 57 bestehen.
 
 ---
 
@@ -544,7 +603,7 @@ scripts/linux/build-decoder-php85.sh
 | Encoder CLI | Vollständig lauffähig | ManifestHash-Update nach Encoding-Durchlauf |
 | PHP Decoder/Loader | Vollständig implementiert | – |
 | Docker / Compose | `Dockerfile` + `docker-compose.yml` vorhanden | Signing-Key als Secret mounten |
-| LicenseServer.Tests | 13/13 (inkl. 8 Security-Tests) | – |
-| EncoderCli.Tests | 40/40 (Glob + MmIgnore + Compression) | – |
+| LicenseServer.Tests | 41/41 (33 SmokeTests + 8 CryptoTests) | – |
+| EncoderCli.Tests | 57/57 (Glob + MmIgnore + Compression + Obfuscator) | – |
 | E2E-Integrationstest | 7/7 (PHP 8.5 skip) | PHP 8.5: `sudo apt install php8.5-dev` + build |
 | Demo-Projekt-Tests | 31/31 (PHP 8.5 skip) | PHP 8.5: siehe oben |

@@ -139,7 +139,21 @@ if (proxyEnabled)
     app.UseForwardedHeaders();
 
 // Serve the embedded Vue Admin UI from wwwroot/admin/
-app.UseStaticFiles();
+// Use AppContext.BaseDirectory (= location of the running DLL) to find wwwroot so
+// this works regardless of how --contentRoot is set: published artifacts, dotnet run,
+// or tests that pass a different content root.
+var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+if (Directory.Exists(wwwrootPath))
+{
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(wwwrootPath)
+    });
+}
+else
+{
+    app.UseStaticFiles();
+}
 
 app.UseRateLimiter();
 
@@ -947,8 +961,22 @@ adminApi.MapGet("/audit-log", async (IDbConnectionFactory db, string? entityType
     return Results.Ok(new { events = result });
 });
 
-// SPA fallback: any /admin/* path not matched as a static file → serve admin/index.html
-app.MapFallbackToFile("/admin/{**slug}", "admin/index.html");
+// SPA fallback: serve admin/index.html for client-side navigation routes.
+// Paths that contain a file extension (e.g. .js, .css, .png) are NOT intercepted —
+// if UseStaticFiles missed them, return 404 so the browser receives a proper error
+// instead of text/html (which breaks <script type="module"> loading).
+app.MapGet("/admin/{**slug}", (string? slug) =>
+{
+    var path = slug ?? "";
+    if (path.Length > 0 && Path.HasExtension(path))
+        return Results.NotFound();
+
+    var indexPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "admin", "index.html");
+    if (!File.Exists(indexPath))
+        return Results.NotFound();
+
+    return Results.Content(File.ReadAllText(indexPath), "text/html; charset=utf-8");
+});
 
 app.Run();
 

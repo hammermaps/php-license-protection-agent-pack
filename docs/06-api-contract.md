@@ -28,9 +28,12 @@ Response:
 {
   "status": "ok",
   "version": "0.1.0",
-  "timeUtc": "2026-06-26T12:00:00Z"
+  "timeUtc": "2026-06-26T12:00:00Z",
+  "database": "ok"
 }
 ```
+
+> Bei DB-Ausfall ist `"database": "error"` und der HTTP-Status 503.
 
 ### POST /api/v1/encoder/customers/upsert
 
@@ -192,16 +195,23 @@ Request:
   "loaderVersion": "0.1.0",
   "phpVersion": "8.4.0",
   "sapi": "fpm-fcgi",
-  "nonce": "base64..."
+  "nonce": "base64...",
+  "hostname": "webserver01",
+  "domain": "example.com",
+  "publicIp": "203.0.113.42"
 }
 ```
+
+> `hostname`, `domain`, `publicIp` sind optional. Sie werden gegen `license.constraints` (`allowedHostnames`, `allowedDomains`, `allowedIps`) geprüft, falls das Feld in der Lizenz gesetzt ist.
 
 Response:
 
 ```json
 {
   "leaseId": "lease_01J...",
+  "format": "mmprotect-lease-v1",
   "projectId": "proj_01J...",
+  "customerId": "cust_01J...",
   "licenseId": "lic_01J...",
   "buildId": "build_01J...",
   "keyId": "key_01J...",
@@ -209,6 +219,7 @@ Response:
   "issuedAt": "2026-06-26T12:00:00Z",
   "expiresAt": "2026-06-27T12:00:00Z",
   "graceUntil": "2026-07-03T12:00:00Z",
+  "features": ["base", "premium"],
   "signature": "base64..."
 }
 ```
@@ -279,6 +290,39 @@ Abfrage des Audit-Logs. Optionale Parameter: `?entityType=license&entityUid=lic_
 
 Response: `{ "events": [...] }` — Array von `AdminAuditEventDto`.
 
+### GET /api/v1/admin/stats
+
+Liefert aggregierte Zählerstände.
+
+Response:
+```json
+{
+  "licenses": 12,
+  "builds": 45,
+  "activations": 103,
+  "leases": 8204
+}
+```
+
+### GET /api/v1/admin/api-clients
+
+Listet alle API-Clients auf.
+
+Response: `{ "clients": [...] }` — Array mit `uid`, `name`, `isActive`, `createdAt`.
+
+### POST /api/v1/admin/api-clients
+
+Legt einen neuen API-Client an. Der `apiKey` wird nur einmalig in der Response zurückgegeben (danach nur noch SHA-256-Hash gespeichert).
+
+Request: `{ "name": "CI-Pipeline" }`
+Response: `{ "uid": "client_...", "name": "CI-Pipeline", "apiKey": "mmk_..." }`
+
+### DELETE /api/v1/admin/api-clients/{clientUid}
+
+Soft-löscht einen API-Client (`is_active = 0`). Der Eintrag bleibt in der Listantwort mit `"isActive": false`.
+
+Response: `{ "deleted": true }`
+
 ---
 
 ## Fehlercodes
@@ -294,9 +338,11 @@ LICENSE_EXPIRED
 LICENSE_NOT_YET_VALID
 LICENSE_REVOKED
 ACTIVATION_LIMIT_REACHED
+ACTIVATION_REVOKED
 BUILD_NOT_FOUND
 MANIFEST_INVALID
 LEASE_DENIED
 RATE_LIMITED
+NOT_FOUND
 SERVER_ERROR
 ```

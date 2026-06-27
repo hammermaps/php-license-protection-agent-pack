@@ -81,13 +81,21 @@ extension=mmloader.so           ; Linux
 ; Path to the vendor's ECDSA-P256 public key (provided by your software vendor)
 mmloader.signing_public_key_file = /etc/mmloader/signing-public.pem
 
+; Enforce ECDSA signature verification (1 = required, 0 = skip — NEVER 0 in production)
+mmloader.require_signature = 1
+
 ; Directory for caching lease responses (must be writable by the web server user)
 mmloader.cache_dir = /var/cache/mmloader
 
 ; License server URL (provided by your software vendor)
-; This is read from .mmprotect/license.json in your application — only set here
-; if you want to override it globally.
+; Typically read from .mmprotect/license.json — only set here to override globally.
 ; mmloader.license_server = https://license.vendor.com
+
+; Path to the build manifest (default: <app_root>/.mmprotect/manifest.json)
+; mmloader.manifest_file = /var/www/myapp/.mmprotect/manifest.json
+
+; Path to the license file (default: <app_root>/.mmprotect/license.json)
+; mmloader.license_file = /var/www/myapp/.mmprotect/license.json
 
 ; Connection and request timeouts (milliseconds)
 mmloader.connect_timeout_ms = 3000
@@ -229,10 +237,6 @@ The file's ECDSA signature could not be verified. Check:
 ### "MMENC: failed to decrypt protected file"
 
 Decryption failed — the ciphertext may have been tampered with or the wrong build key was used. Re-download the application from your vendor.
-
-### "MMENC: protected PHP file detected, but runtime decoder is not implemented yet"
-
-The installed extension version is outdated (pre-Week-1 skeleton). Request an updated `mmloader.so` from your vendor.
 
 ### PHP version mismatch
 

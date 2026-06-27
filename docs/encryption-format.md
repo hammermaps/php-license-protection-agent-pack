@@ -127,6 +127,32 @@ The loader:
 
 ---
 
+## Optional: LZ4 Compression
+
+When `"compression": "lz4"` is set in the MMENC1 header, the plaintext PHP is compressed with LZ4-Block (HC) **before** AES-GCM encryption:
+
+```
+ciphertext = AES-256-GCM( LZ4_compress( phpPlaintext ) )
+```
+
+The compressed block format prepended to the LZ4 data:
+
+```
+Offset  Size      Content
+0       4 bytes   Original (uncompressed) size, little-endian uint32
+4       N bytes   LZ4 block data
+```
+
+The loader checks `header.compression`:
+- Missing or `null` → no decompression (backward compatible)
+- `"lz4"` → call `LZ4_decompress_safe(ciphertext+4, originalSize)` after AES-GCM decrypt
+
+**Compression savings:** Typically 40–60 % for PHP source code. LZ4-Block (not LZ4-Frame) is used — the LZ4 decompressor is embedded in the loader (`vendor/lz4/`) without requiring `liblz4-dev` on customer machines.
+
+The `licenseServer` field in the header (optional) embeds the base URL of the license server used for lease requests. If absent, `mmloader.license_server` from `php.ini` is used as fallback. This field is **not** part of the ECDSA signature scope — tampering can only cause a lease failure, not a key leak.
+
+---
+
 ## Signing: ECDSA-P256
 
 | Parameter | Value |
@@ -197,25 +223,34 @@ The loader POSTs to `/api/v1/runtime/lease` with:
   "buildId": "build_...",
   "manifestHash": "sha256:...",
   "machineFingerprint": "sha256hex(/etc/machine-id:hostname)",
-  "nonce": "Base64(16 random bytes)"
+  "loaderVersion": "0.1.0",
+  "phpVersion": "8.4.0",
+  "sapi": "fpm-fcgi",
+  "nonce": "Base64(12 random bytes)",
+  "hostname": "webserver01",
+  "domain": "example.com",
+  "publicIp": "203.0.113.42"
 }
 ```
+
+> `hostname`, `domain`, `publicIp` sind optional. Sie werden gegen `license.constraints` (`allowedHostnames`, `allowedDomains`, `allowedIps`) geprüft, falls das jeweilige Feld in der Lizenz gesetzt ist.
 
 The server responds with a signed lease:
 
 ```json
 {
-  "format": "MMENC-LEASE-1",
+  "format": "mmprotect-lease-v1",
   "leaseId": "lease_...",
-  "projectId": "...",
-  "customerId": "...",
-  "licenseId": "...",
-  "buildId": "...",
-  "keyId": "runtime-key",
+  "projectId": "proj_...",
+  "customerId": "cust_...",
+  "licenseId": "lic_...",
+  "buildId": "build_...",
+  "keyId": "key_...",
   "runtimeKey": "Base64(buildKey)",
-  "issuedAt": "2026-06-26T12:00:00+00:00",
-  "expiresAt": "2026-06-27T12:00:00+00:00",
-  "graceUntil": "2026-07-04T12:00:00+00:00",
+  "issuedAt": "2026-06-26T12:00:00Z",
+  "expiresAt": "2026-06-27T12:00:00Z",
+  "graceUntil": "2026-07-04T12:00:00Z",
+  "features": ["base", "premium"],
   "signature": "Base64(ECDSA-P256 over leaseId:buildId:fingerprint:expiresAt)"
 }
 ```

@@ -130,11 +130,18 @@ Copy `configs/server.appsettings.example.json` to `/opt/mmprotect/server/appsett
   },
   "Security": {
     "SigningPrivateKeyFile": "/opt/mmprotect/keys/signing-private.pem",
+    "KeyEncryptionKey": "<32-byte hex — generated with: openssl rand -hex 32>",
     "EncoderApiKeys": [
       "your-encoder-api-key-here"
     ],
+    "AdminApiKeys": [
+      "your-admin-api-key-here"
+    ],
     "LeaseTtlMinutes": 1440,
     "GracePeriodDays": 7
+  },
+  "RateLimiting": {
+    "Enabled": false
   },
   "AllowedHosts": "*",
   "Logging": {
@@ -146,9 +153,23 @@ Copy `configs/server.appsettings.example.json` to `/opt/mmprotect/server/appsett
 }
 ```
 
+**Schlüssel generieren:**
+
+```bash
+# Key Encryption Key (schützt Build-Keys in der Datenbank)
+openssl rand -hex 32   # → Security:KeyEncryptionKey
+
+# Encoder API Key
+openssl rand -base64 32   # → Security:EncoderApiKeys[0]
+
+# Admin API Key
+openssl rand -base64 32   # → Security:AdminApiKeys[0]
+```
+
 **Never log or commit:**
 - `SigningPrivateKeyFile` contents
-- `EncoderApiKeys` values
+- `KeyEncryptionKey` value
+- `EncoderApiKeys` / `AdminApiKeys` values
 - `ConnectionStrings` passwords
 
 ---
@@ -224,8 +245,30 @@ openssl rand -base64 32
 
 ```bash
 curl -s https://license.example.com/health
-# → {"status":"ok","version":"1.0.0.0","timeUtc":"..."}
+# → {"status":"ok","version":"0.1.0","timeUtc":"...","database":"ok"}
 ```
+
+Bei DB-Ausfall: `"database": "error"` mit HTTP 503.
+
+---
+
+## API Key Management (Admin API)
+
+Der **Admin API Key** (`Security:AdminApiKeys`) erlaubt Zugriff auf alle `/api/v1/admin/`-Endpunkte:
+- Lizenzen auflisten / sperren
+- Builds sperren (Revocation)
+- Aktivierungen verwalten
+- Audit-Log abfragen
+- Statistiken abrufen
+- API-Clients anlegen und löschen
+
+```bash
+# Admin-Endpunkt testen
+curl -s https://license.example.com/api/v1/admin/stats \
+    -H "Authorization: Bearer YOUR_ADMIN_KEY" | python3 -m json.tool
+```
+
+Der Encoder API Key (`Security:EncoderApiKeys`) berechtigt nur zu `/api/v1/encoder/`-Endpunkten — nicht zum Admin-Bereich.
 
 ---
 
@@ -280,9 +323,14 @@ Prometheus-compatible metrics can be added via `OpenTelemetry.Instrumentation.As
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `AUTH_INVALID` from encoder | Wrong API key | Check `EncoderApiKeys` in config |
+| `AUTH_REQUIRED` / `AUTH_INVALID` from encoder | Wrong or missing API key | Check `Security:EncoderApiKeys` in config |
+| `AUTH_INVALID` from admin API | Wrong admin key | Check `Security:AdminApiKeys` in config |
 | `LEASE_DENIED` | Build or manifest hash mismatch | Re-encode the project |
-| `LICENSE_EXPIRED` | License `valid_until` passed | Update the license via upsert API |
-| `ACTIVATION_LIMIT_REACHED` | Too many machines activated | Increase `max_activations` or revoke stale activations |
-| HTTP 500 on `/runtime/lease` | Database error | Check `journalctl` for stack trace |
+| `LICENSE_NOT_YET_VALID` | License `validFrom` is in the future | Update `validFrom` or wait |
+| `LICENSE_EXPIRED` | License `validUntil` passed | Update the license via upsert API |
+| `LICENSE_REVOKED` | License manually revoked | Re-issue a new license |
+| `ACTIVATION_LIMIT_REACHED` | Too many machines activated | Increase `maxActivations` or delete stale activations via Admin API |
+| `ACTIVATION_REVOKED` | Specific activation was revoked | Machine needs re-activation or contact vendor |
+| HTTP 500 on `/runtime/lease` | Database error or missing `KeyEncryptionKey` | Check `journalctl` for stack trace |
+| Server startup warning about HMAC | `Security:SigningPrivateKeyFile` not set | Configure the ECDSA signing key |
 | Loader: "signature mismatch" | Wrong public key deployed | Verify customer has the current `signing-public.pem` |

@@ -86,7 +86,16 @@
       "Bash(bash tests/integration/run-integration-test.sh)",
       "Bash(dotnet /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/artifacts/encoder/linux-x64/mmencoder.dll encode-dir --help)",
       "Bash(dotnet /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/artifacts/encoder/linux-x64/mmencoder.dll)",
-      "Bash(bash tests/integration/run-multi-server-test.sh 2>&1)"
+      "Bash(bash tests/integration/run-multi-server-test.sh 2>&1)",
+      "Bash(dotnet clean *)",
+      "Bash(composer dump-autoload *)",
+      "Bash(MMTEST_LICENSE_SERVER=http://127.0.0.1:15390 MMTEST_TMP_DIR=/tmp php8.4 -d apc.enable_cli=1 public/index.php)",
+      "Bash(MMTEST_LICENSE_SERVER=http://127.0.0.1:15390 MMTEST_TMP_DIR=/tmp php8.4 *)",
+      "Bash(dotnet run *)",
+      "Bash(MMTEST_LICENSE_SERVER=http://x MMTEST_TMP_DIR=/tmp php8.4 -d apc.enable_cli=1 -r \"putenv\\('MMTEST_LICENSE_SERVER=http://x'\\); putenv\\('MMTEST_TMP_DIR=/tmp'\\); require 'public/index.php';\")",
+      "Bash(bash -n /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/tests/comprehensive/run-comprehensive-test.sh 2>&1)",
+      "Bash(grep -n '^\\\\`\\\\`\\\\`json' /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/docs/06-api-contract.md)",
+      "Bash(grep -n '^{$' /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/docs/06-api-contract.md)"
     ]
   }
 }

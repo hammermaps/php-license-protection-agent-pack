@@ -1,0 +1,13 @@
+{
+  "name": "mmprotect/comprehensive-test",
+  "description": "Comprehensive PHP project for MMProtect end-to-end testing",
+  "type": "project",
+  "require": {
+    "php": ">=8.4"
+  },
+  "autoload": {
+    "psr-4": {
+      "CompTest\\": "src/"
+    }
+  }
+}

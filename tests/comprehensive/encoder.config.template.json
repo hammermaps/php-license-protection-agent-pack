@@ -1,0 +1,49 @@
+{
+  "licenseServer": {
+    "baseUrl": "__SERVER_URL__",
+    "apiKey": "__API_KEY__",
+    "timeoutSeconds": 30
+  },
+  "defaults": {
+    "phpMinVersion": "8.4",
+    "algorithm": "AES-256-GCM",
+    "keepPhpExtension": true,
+    "writeManifest": true,
+    "signing": {
+      "privateKeyFile": "__SIGNING_PRIV__",
+      "publicKeyFile":  "__SIGNING_PUB__"
+    }
+  },
+  "projects": [
+    {
+      "projectKey": "__PROJECT_KEY__",
+      "name": "__PROJECT_NAME__",
+      "version": "1.0.0",
+      "sourceRevision": "comprehensive-test",
+      "sourceRoot": "__SOURCE_ROOT__",
+      "outputRoot": "__OUTPUT_ROOT__",
+      "customer": {
+        "externalCustomerRef": "__CUSTOMER_REF__",
+        "name": "__CUSTOMER_NAME__",
+        "email": "comptest@example.invalid",
+        "notes": "Created by comprehensive test"
+      },
+      "license": {
+        "licenseKey": "__LICENSE_KEY__",
+        "validFrom": "2026-01-01T00:00:00Z",
+        "validUntil": "2028-12-31T23:59:59Z",
+        "maxActivations": 10,
+        "features": ["base", "premium"]
+      },
+      "include": [
+        "src/**/*.php"
+      ],
+      "exclude": [],
+      "copyPlain": [
+        "public/**",
+        "vendor/**",
+        "composer.json"
+      ]
+    }
+  ]
+}

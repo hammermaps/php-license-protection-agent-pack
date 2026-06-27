@@ -59,30 +59,43 @@ mysql -u root -p < database/mysql/schema.sql
 
 ## Schritt 5 — Konfiguration anlegen
 
+Generieren Sie zunächst die nötigen Secrets:
+
 ```bash
-sudo tee /opt/mmprotect/server/appsettings.Production.json > /dev/null << 'EOF'
+ENCODER_KEY=$(openssl rand -hex 32)
+ADMIN_KEY=$(openssl rand -hex 32)
+KEK=$(openssl rand -hex 32)
+echo "Encoder-Key: $ENCODER_KEY"
+echo "Admin-Key:   $ADMIN_KEY"
+echo "KEK:         $KEK"
+```
+
+```bash
+sudo tee /opt/mmprotect/server/appsettings.Production.json > /dev/null << EOF
 {
   "DatabaseProvider": "sqlite",
   "ConnectionStrings": {
     "Sqlite": "Data Source=/opt/mmprotect/data/mm_license.db"
   },
   "Security": {
+    "SigningPrivateKeyFile": "/opt/mmprotect/keys/signing-private.pem",
+    "KeyEncryptionKey": "$KEK",
     "LeaseTtlMinutes": 1440,
     "GracePeriodDays": 7,
     "EncoderApiKeys": [
-      "HIER-EINEN-SICHEREN-API-KEY-EINTRAGEN"
+      "$ENCODER_KEY"
+    ],
+    "AdminApiKeys": [
+      "$ADMIN_KEY"
     ]
-  },
-  "Urls": "http://localhost:5000"
+  }
 }
 EOF
 ```
 
-> **API-Key generieren:**
-> ```bash
-> openssl rand -hex 32
-> ```
-> Den generierten Wert in `EncoderApiKeys` eintragen. Diesen Key bekommt später der Encoder.
+> **Hinweis:** Führen Sie diesen Befehl erst aus, **nachdem** Sie in Schritt 8 die Signing-Keys generiert haben (wegen `SigningPrivateKeyFile`). Die Reihenfolge der Schritte 5 und 8 können Sie tauschen.
+
+> **API-Keys sicher aufbewahren:** Den Encoder-Key braucht der Encoder-Betreiber (Softwareentwickler). Der Admin-Key ist nur für interne Verwaltungsaufgaben bestimmt.
 
 ---
 

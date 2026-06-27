@@ -66,33 +66,30 @@ ls -la keys/
 # Schema anlegen
 sqlite3 /tmp/mm_dev.db < database/sqlite/schema.sql
 
-# appsettings überschreiben
-cat > /tmp/mm_dev_settings.json << 'EOF'
-{
-  "DatabaseProvider": "sqlite",
-  "ConnectionStrings": {
-    "Sqlite": "Data Source=/tmp/mm_dev.db"
-  },
-  "Security": {
-    "LeaseTtlMinutes": 60,
-    "GracePeriodDays": 7,
-    "EncoderApiKeys": ["dev-key-1234"]
-  },
-  "Urls": "http://localhost:15380"
-}
-EOF
+# KEK und API-Key generieren
+DEV_KEK=$(openssl rand -hex 32)
+DEV_API_KEY="dev-key-1234"   # für lokale Entwicklung OK
 
-# Server starten (läuft im Hintergrund)
+# Server starten mit CLI-Overrides (läuft im Hintergrund)
 SERVER_DLL=artifacts/server/linux-x64/MmProtect.LicenseServer.dll
+ASPNETCORE_URLS="http://localhost:15380" \
 dotnet "$SERVER_DLL" \
     --contentRoot "$(dirname "$(realpath "$SERVER_DLL")")" \
-    --configPath /tmp/mm_dev_settings.json &
+    --DatabaseProvider sqlite \
+    --ConnectionStrings:Sqlite "Data Source=/tmp/mm_dev.db" \
+    --Security:SigningPrivateKeyFile "$(realpath keys/signing-private.pem)" \
+    --Security:KeyEncryptionKey "$DEV_KEK" \
+    --Security:EncoderApiKeys:0 "$DEV_API_KEY" \
+    --Security:AdminApiKeys:0 "dev-admin-key" \
+    &
 SERVER_PID=$!
 
 # Health-Check
 sleep 2 && curl -s http://localhost:15380/health
-# → {"status":"ok","version":"..."}
+# → {"status":"ok","version":"...","database":"ok"}
 ```
+
+> **Reihenfolge:** Schritt 3 (Signing-Keys generieren) muss vor Schritt 4 abgeschlossen sein, da `signing-private.pem` beim Serverstart benötigt wird.
 
 ---
 
@@ -153,15 +150,18 @@ EOF
 ## Schritt 7 — PHP-Dateien verschlüsseln
 
 ```bash
-dotnet artifacts/encoder/linux-x64/mmencoder.dll \
-    encode --config /tmp/encoder-dev.json --project demo
+artifacts/encoder/linux-x64/mmencoder encode-dir \
+    --source tests/php-demo \
+    --output /tmp/mm_encoded_demo \
+    --config /tmp/encoder-dev.json \
+    --project demo
 
 # Verschlüsselung prüfen
-file /tmp/mm_encoded_demo/src/App/Application.php
-# → data (MMENC1-Binärdatei, kein lesbarer PHP-Quellcode)
+head -c 6 /tmp/mm_encoded_demo/src/App/Application.php
+# → MMENC1
 
 ls /tmp/mm_encoded_demo/.mmprotect/
-# manifest.json  license.json  dev-buildkey.b64
+# manifest.json  license.json
 ```
 
 ---
@@ -207,9 +207,9 @@ php8.4 \
 ## Schritt 9 — Tests ausführen
 
 ```bash
-# .NET-Unittests
-dotnet test src/LicenseServer.Tests/    # 5 Tests — in-process, SQLite
-dotnet test src/EncoderCli.Tests/       # 12 Tests — Glob + FileSelector
+# .NET-Tests
+dotnet test src/LicenseServer.Tests/    # 41 Tests (33 SmokeTests + 8 CryptoTests)
+dotnet test src/EncoderCli.Tests/       # 57 Tests (Glob + MmIgnore + Compression + Obfuscator)
 
 # Decoder-Tests (Week 1–4)
 bash tests/decoder-loader/run-tests.sh
@@ -217,9 +217,15 @@ bash tests/decoder-loader/run-tests-week2.sh
 bash tests/decoder-loader/run-tests-week3.sh
 bash tests/decoder-loader/run-tests-week4.sh
 
-# Vollständiger E2E-Test (startet eigenen Server, räumt auf)
+# E2E-Integrationstest (startet eigenen Server, räumt auf)
 bash tests/integration/run-integration-test.sh
 # → 7 passed, 0 failed
+
+# Demo-Projekt (31/31 Tests)
+bash tests/php-demo/run-demo-test.sh
+
+# Umfassender Comprehensive Test (36 Phasen — benötigt mmloader.so)
+bash tests/comprehensive/run-comprehensive-test.sh
 
 # Alles auf einmal
 scripts/linux/test-all.sh
@@ -272,7 +278,7 @@ rm -rf /tmp/mm_encoded_demo /tmp/mmloader_cache
 **LZ4-Komprimierung aktivieren** (spart 40–60 % bei großem PHP-Code):
 ```bash
 # Via CLI-Flag (Dev-Mode):
-dotnet artifacts/encoder/linux-x64/mmencoder.dll encode-dir \
+artifacts/encoder/linux-x64/mmencoder encode-dir \
     --source tests/php-demo --output /tmp/encoded --dev --compress lz4
 
 # Via Config (Produktion):
