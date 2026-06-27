@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write   # needed to create GitHub Releases
+
+jobs:
+  # ── Linux: Server, Encoder, Decoder PHP 8.4 + 8.5 ────────────────────────────
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore .NET
+        run: |
+          dotnet restore src/LicenseServer/LicenseServer.csproj
+          dotnet restore src/EncoderCli/EncoderCli.csproj
+
+      - name: Test
+        run: |
+          dotnet test src/LicenseServer.Tests/LicenseServer.Tests.csproj -c Release --verbosity normal
+          dotnet test src/EncoderCli.Tests/EncoderCli.Tests.csproj       -c Release --verbosity normal
+
+      - name: Publish Server (linux-x64)
+        run: >
+          dotnet publish src/LicenseServer/LicenseServer.csproj
+          -c Release -r linux-x64 --self-contained false
+          -o artifacts/server/linux-x64
+
+      - name: Publish Encoder (linux-x64)
+        run: >
+          dotnet publish src/EncoderCli/EncoderCli.csproj
+          -c Release -r linux-x64 --self-contained false
+          -o artifacts/encoder/linux-x64
+
+      - name: Add ondrej/php PPA
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository ppa:ondrej/php -y
+          sudo apt-get update -qq
+
+      - name: Build Decoder (PHP 8.4)
+        run: |
+          sudo apt-get install -y php8.4-dev libssl-dev libcurl4-openssl-dev
+          cd src/PhpDecoderLoader
+          phpize8.4
+          ./configure --enable-mmloader --with-php-config=php-config8.4
+          make -j$(nproc)
+          mkdir -p ../../artifacts/decoder/linux-x64
+          cp modules/mmloader.so ../../artifacts/decoder/linux-x64/mmloader.so
+
+      - name: Build Decoder (PHP 8.5)
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y php8.5-dev
+          bash scripts/linux/build-decoder-php85.sh
+
+      - name: Upload linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: artifacts/
+          retention-days: 1
+
+  # ── Windows: Server + Encoder ────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore .NET
+        run: |
+          dotnet restore src/LicenseServer/LicenseServer.csproj
+          dotnet restore src/EncoderCli/EncoderCli.csproj
+
+      - name: Publish Server (win-x64)
+        run: >
+          dotnet publish src/LicenseServer/LicenseServer.csproj
+          -c Release -r win-x64 --self-contained false
+          -o artifacts/server/win-x64
+
+      - name: Publish Encoder (win-x64)
+        run: >
+          dotnet publish src/EncoderCli/EncoderCli.csproj
+          -c Release -r win-x64 --self-contained false
+          -o artifacts/encoder/win-x64
+
+      - name: Upload windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: artifacts/
+          retention-days: 1
+
+  # ── GitHub Release ────────────────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts
+          path: artifacts/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-artifacts
+          path: artifacts/
+
+      - name: Package ZIP
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          mkdir -p artifacts/release
+          zip -r "artifacts/release/mmprotect-${VERSION}.zip" \
+            artifacts/server artifacts/encoder artifacts/decoder \
+            configs docs database scripts
+          echo "ZIP=artifacts/release/mmprotect-${VERSION}.zip" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MMProtect ${{ github.ref_name }}
+          body: |
+            ## MMProtect ${{ github.ref_name }}
+
+            ### Artefakte
+            | Datei | Beschreibung |
+            |---|---|
+            | `mmprotect-${{ github.ref_name }}.zip` | Vollständiges Release-Paket (Server, Encoder, Decoder) |
+
+            ### Inhalt
+            - **LicenseServer** — linux-x64 + win-x64
+            - **EncoderCLI (`mmencoder`)** — linux-x64 + win-x64
+            - **PHP Decoder (`mmloader.so`)** — PHP 8.4 (linux-x64), PHP 8.5 falls gebaut
+            - Konfigurationsvorlagen, Datenbankschemas, Dokumentation
+
+            ### Erste Schritte
+            Siehe [`docs/quickstart-operator.md`](docs/quickstart-operator.md) und
+            [`docs/quickstart-developer.md`](docs/quickstart-developer.md).
+          files: |
+            ${{ env.ZIP }}
+            artifacts/server/linux-x64/MmProtect.LicenseServer.dll
+            artifacts/encoder/linux-x64/mmencoder
+            artifacts/encoder/win-x64/mmencoder.exe
+            artifacts/decoder/linux-x64/mmloader.so
+          fail_on_unmatched_files: false
+          generate_release_notes: true

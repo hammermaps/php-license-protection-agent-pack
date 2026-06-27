@@ -1,0 +1,84 @@
+name: Windows Build
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    name: .NET Build & Test (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # Test projects are not in src/MmProtect.sln — restore individually.
+      - name: Restore
+        run: |
+          dotnet restore src/LicenseServer/LicenseServer.csproj
+          dotnet restore src/EncoderCli/EncoderCli.csproj
+          dotnet restore src/LicenseServer.Tests/LicenseServer.Tests.csproj
+          dotnet restore src/EncoderCli.Tests/EncoderCli.Tests.csproj
+
+      - name: Build
+        run: |
+          dotnet build src/LicenseServer/LicenseServer.csproj -c Release --no-restore
+          dotnet build src/EncoderCli/EncoderCli.csproj       -c Release --no-restore
+
+      - name: Test – LicenseServer (41)
+        run: >
+          dotnet test src/LicenseServer.Tests/LicenseServer.Tests.csproj
+          -c Release --no-restore --verbosity normal
+          --logger "trx;LogFileName=licenseserver.trx"
+          --results-directory testresults/
+
+      - name: Test – EncoderCli (57)
+        run: >
+          dotnet test src/EncoderCli.Tests/EncoderCli.Tests.csproj
+          -c Release --no-restore --verbosity normal
+          --logger "trx;LogFileName=encodercli.trx"
+          --results-directory testresults/
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows
+          path: testresults/*.trx
+          retention-days: 14
+
+      - name: Publish – LicenseServer (win-x64)
+        run: >
+          dotnet publish src/LicenseServer/LicenseServer.csproj
+          -c Release -r win-x64 --self-contained false
+          -o artifacts\server\win-x64
+
+      - name: Publish – EncoderCli (win-x64)
+        run: >
+          dotnet publish src/EncoderCli/EncoderCli.csproj
+          -c Release -r win-x64 --self-contained false
+          -o artifacts\encoder\win-x64
+
+      - name: Smoke-test Encoder CLI
+        run: artifacts\encoder\win-x64\mmencoder.exe --help
+
+      - name: Upload – Server (win-x64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmprotect-server-win-x64
+          path: artifacts/server/win-x64/
+          retention-days: 30
+
+      - name: Upload – Encoder (win-x64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmprotect-encoder-win-x64
+          path: artifacts/encoder/win-x64/
+          retention-days: 30

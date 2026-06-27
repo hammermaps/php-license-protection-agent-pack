@@ -1,0 +1,85 @@
+name: CodeQL
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    # Monday 05:30 UTC — staggered to reduce GitHub scheduler contention
+    - cron: "30 5 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: csharp
+            build-mode: automatic
+
+          - language: c-cpp
+            build-mode: manual
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── C# prerequisites ────────────────────────────────────────────────────
+      - name: Setup .NET 8 (C# only)
+        if: matrix.language == 'csharp'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore .NET (C# only)
+        if: matrix.language == 'csharp'
+        run: |
+          dotnet restore src/LicenseServer/LicenseServer.csproj
+          dotnet restore src/EncoderCli/EncoderCli.csproj
+          dotnet restore src/LicenseServer.Tests/LicenseServer.Tests.csproj
+          dotnet restore src/EncoderCli.Tests/EncoderCli.Tests.csproj
+
+      # ── C prerequisites ──────────────────────────────────────────────────────
+      - name: Install C build dependencies (C only)
+        if: matrix.language == 'c-cpp'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository ppa:ondrej/php -y
+          sudo apt-get update -qq
+          sudo apt-get install -y php8.4-dev libssl-dev libcurl4-openssl-dev
+
+      # ── CodeQL initialization ────────────────────────────────────────────────
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Security-extended suite catches more injection / crypto / memory patterns
+          queries: security-extended
+
+      # ── Build for C (manual mode) ────────────────────────────────────────────
+      - name: Build – PhpDecoderLoader (C)
+        if: matrix.build-mode == 'manual'
+        working-directory: src/PhpDecoderLoader
+        run: |
+          phpize8.4
+          ./configure --enable-mmloader --with-php-config=php-config8.4
+          make -j$(nproc)
+
+      # ── Build for C# (automatic mode handled by CodeQL) ─────────────────────
+      - name: Autobuild (C#)
+        if: matrix.build-mode == 'automatic'
+        uses: github/codeql-action/autobuild@v3
+
+      # ── Analysis ─────────────────────────────────────────────────────────────
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
