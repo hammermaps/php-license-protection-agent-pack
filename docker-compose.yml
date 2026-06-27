@@ -1,58 +1,105 @@
+# MMProtect License Server – MySQL variant
+#
+# Quickstart:
+#   cp .env.example .env
+#   # edit .env — set passwords, API keys, KEK, signing key path
+#   docker compose up -d
+#
+# All MMPROTECT_* variables can also be passed directly to `docker run`.
+# For SQLite (no MySQL dependency), use docker-compose.sqlite.yml instead.
+
 services:
+
+  # ── MySQL 8.4 ───────────────────────────────────────────────────────────────
   mysql:
     image: mysql:8.4
     container_name: mm-license-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: mm_license
-      MYSQL_USER: mm_license
-      MYSQL_PASSWORD: change-me-db-password
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-change-me-root-password}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-mm_license}"
+      MYSQL_USER: "${MYSQL_USER:-mm_license}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-change-me-db-password}"
     ports:
-      - "3306:3306"
+      # Bind to localhost only – no direct external access
+      - "127.0.0.1:3306:3306"
     volumes:
       - mm_license_mysql:/var/lib/mysql
       - ./database/mysql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "mm_license", "-pchange-me-db-password"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "${MYSQL_USER:-mm_license}",
+             "-p${MYSQL_PASSWORD:-change-me-db-password}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # ── License Server ──────────────────────────────────────────────────────────
   license-server:
     build:
       context: .
       dockerfile: Dockerfile
+    image: mmprotect-license-server:latest
     container_name: mm-license-server
     restart: unless-stopped
     depends_on:
       mysql:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      # MMPROTECT_PORT controls both the host port and the internal listen port.
+      - "${MMPROTECT_PORT:-8080}:${MMPROTECT_PORT:-8080}"
     environment:
-      # Database
-      DatabaseProvider: mysql
-      ConnectionStrings__MySql: "Server=mysql;Port=3306;Database=mm_license;User Id=mm_license;Password=change-me-db-password;AllowPublicKeyRetrieval=true;SslMode=Preferred;"
-      # API keys — change these before deploying
-      Security__EncoderApiKeys__0: "change-me-encoder-api-key"
-      Security__AdminApiKeys__0: "change-me-admin-api-key"
-      # Build-key encryption: generate with: openssl rand -hex 32
-      Security__KeyEncryptionKey: ""
-      # ECDSA-P256 signing key — mount the file and set path:
-      # Security__SigningPrivateKeyFile: "/run/secrets/signing-private.pem"
-      # Lease TTL
-      Lease__TtlMinutes: "60"
-      Lease__GraceMinutes: "1440"
-      # Reverse proxy (set if behind nginx/traefik)
-      ReverseProxy__Enabled: "false"
-      # Rate limiting
-      RateLimiting__LeasePerIpPerMinute: "20"
-      ASPNETCORE_ENVIRONMENT: Production
+      # ── Port ──────────────────────────────────────────────────────────────
+      ASPNETCORE_HTTP_PORTS: "${MMPROTECT_PORT:-8080}"
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Production}"
+
+      # ── Database ──────────────────────────────────────────────────────────
+      # mysql | sqlite
+      DatabaseProvider: "${MMPROTECT_DB_PROVIDER:-mysql}"
+
+      # Connection strings — MYSQL_ vars are reused from the mysql service above.
+      # Override the whole string via MMPROTECT_MYSQL_CONNSTR for external MySQL.
+      ConnectionStrings__MySql: "${MMPROTECT_MYSQL_CONNSTR:-Server=mysql;Port=3306;Database=${MYSQL_DATABASE:-mm_license};User Id=${MYSQL_USER:-mm_license};Password=${MYSQL_PASSWORD:-change-me-db-password};AllowPublicKeyRetrieval=true;SslMode=Preferred;}"
+      ConnectionStrings__Sqlite: "${MMPROTECT_SQLITE_CONNSTR:-Data Source=/var/cache/mmprotect/mm_license.db}"
+
+      # ── API Keys ──────────────────────────────────────────────────────────
+      # Static keys loaded at startup. Additional keys can be managed via the
+      # Admin API (/api/v1/admin/api-clients) at runtime — no restart needed.
+      # To add more static keys: Security__EncoderApiKeys__1, __2, …
+      Security__EncoderApiKeys__0: "${MMPROTECT_ENCODER_API_KEY_0:?MMPROTECT_ENCODER_API_KEY_0 must be set in .env}"
+      Security__AdminApiKeys__0: "${MMPROTECT_ADMIN_API_KEY_0:?MMPROTECT_ADMIN_API_KEY_0 must be set in .env}"
+
+      # ── Cryptography ──────────────────────────────────────────────────────
+      # AES-256-GCM key that wraps stored build keys.
+      # Generate: openssl rand -hex 32
+      # Leave empty for dev — keys stored unencrypted (startup warning).
+      Security__KeyEncryptionKey: "${MMPROTECT_KEK:-}"
+
+      # ECDSA-P256 private key for lease signatures.
+      # Set MMPROTECT_SIGNING_KEY_HOST_PATH=/path/on/host/signing-private.pem
+      # → auto-mounts the file and sets this env var to the container path.
+      # Leave unset → falls back to HMAC-SHA256 (startup warning, dev only).
+      Security__SigningPrivateKeyFile: "${MMPROTECT_SIGNING_KEY_HOST_PATH:+/run/secrets/signing-private.pem}"
+
+      # ── Lease ─────────────────────────────────────────────────────────────
+      Security__LeaseTtlMinutes: "${MMPROTECT_LEASE_TTL_MINUTES:-1440}"
+      Security__GracePeriodDays: "${MMPROTECT_GRACE_PERIOD_DAYS:-7}"
+
+      # ── Reverse Proxy (nginx / Traefik) ───────────────────────────────────
+      ReverseProxy__Enabled: "${MMPROTECT_REVERSE_PROXY_ENABLED:-false}"
+      ReverseProxy__ForwardLimit: "${MMPROTECT_FORWARD_LIMIT:-1}"
+
+      # ── Rate Limiting ─────────────────────────────────────────────────────
+      RateLimiting__Enabled: "${MMPROTECT_RATE_LIMITING_ENABLED:-true}"
+      RateLimiting__LeaseEndpoint__PermitLimit: "${MMPROTECT_RATE_LIMIT_PERMITS:-10}"
+      RateLimiting__LeaseEndpoint__WindowSeconds: "${MMPROTECT_RATE_LIMIT_WINDOW:-60}"
+
     volumes:
-      # Optional: mount signing key
-      # - /etc/mmprotect/signing-private.pem:/run/secrets/signing-private.pem:ro
-      - mm_license_cache:/tmp/mmprotect-cache
+      # Lease cache and optional SQLite DB
+      - mm_license_cache:/var/cache/mmprotect
+      # ECDSA signing key — mounted automatically when MMPROTECT_SIGNING_KEY_HOST_PATH is set.
+      # Uses /dev/null as a harmless placeholder when no key path is configured.
+      - "${MMPROTECT_SIGNING_KEY_HOST_PATH:-/dev/null}:/run/secrets/signing-private.pem:ro"
 
 volumes:
   mm_license_mysql:

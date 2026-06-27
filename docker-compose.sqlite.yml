@@ -1,0 +1,62 @@
+# MMProtect License Server – SQLite standalone variant
+#
+# Single-container setup — no external database required.
+# Suitable for development, small deployments, and testing.
+#
+# Quickstart:
+#   cp .env.example .env
+#   # edit .env — set API keys, KEK, signing key path
+#   docker compose -f docker-compose.sqlite.yml up -d
+
+services:
+
+  license-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mmprotect-license-server:latest
+    container_name: mm-license-server
+    restart: unless-stopped
+    ports:
+      - "${MMPROTECT_PORT:-8080}:${MMPROTECT_PORT:-8080}"
+    environment:
+      # ── Port ──────────────────────────────────────────────────────────────
+      ASPNETCORE_HTTP_PORTS: "${MMPROTECT_PORT:-8080}"
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Production}"
+
+      # ── Database (SQLite) ─────────────────────────────────────────────────
+      DatabaseProvider: "sqlite"
+      ConnectionStrings__Sqlite: "${MMPROTECT_SQLITE_CONNSTR:-Data Source=/var/cache/mmprotect/mm_license.db}"
+
+      # ── API Keys ──────────────────────────────────────────────────────────
+      # To add more static keys: Security__EncoderApiKeys__1, __2, …
+      Security__EncoderApiKeys__0: "${MMPROTECT_ENCODER_API_KEY_0:?MMPROTECT_ENCODER_API_KEY_0 must be set in .env}"
+      Security__AdminApiKeys__0: "${MMPROTECT_ADMIN_API_KEY_0:?MMPROTECT_ADMIN_API_KEY_0 must be set in .env}"
+
+      # ── Cryptography ──────────────────────────────────────────────────────
+      # Generate: openssl rand -hex 32
+      Security__KeyEncryptionKey: "${MMPROTECT_KEK:-}"
+      # Set MMPROTECT_SIGNING_KEY_HOST_PATH to auto-mount and configure the key.
+      Security__SigningPrivateKeyFile: "${MMPROTECT_SIGNING_KEY_HOST_PATH:+/run/secrets/signing-private.pem}"
+
+      # ── Lease ─────────────────────────────────────────────────────────────
+      Security__LeaseTtlMinutes: "${MMPROTECT_LEASE_TTL_MINUTES:-1440}"
+      Security__GracePeriodDays: "${MMPROTECT_GRACE_PERIOD_DAYS:-7}"
+
+      # ── Reverse Proxy ─────────────────────────────────────────────────────
+      ReverseProxy__Enabled: "${MMPROTECT_REVERSE_PROXY_ENABLED:-false}"
+      ReverseProxy__ForwardLimit: "${MMPROTECT_FORWARD_LIMIT:-1}"
+
+      # ── Rate Limiting ─────────────────────────────────────────────────────
+      RateLimiting__Enabled: "${MMPROTECT_RATE_LIMITING_ENABLED:-true}"
+      RateLimiting__LeaseEndpoint__PermitLimit: "${MMPROTECT_RATE_LIMIT_PERMITS:-10}"
+      RateLimiting__LeaseEndpoint__WindowSeconds: "${MMPROTECT_RATE_LIMIT_WINDOW:-60}"
+
+    volumes:
+      # SQLite database file + lease cache
+      - mm_license_data:/var/cache/mmprotect
+      # ECDSA signing key
+      - "${MMPROTECT_SIGNING_KEY_HOST_PATH:-/dev/null}:/run/secrets/signing-private.pem:ro"
+
+volumes:
+  mm_license_data:

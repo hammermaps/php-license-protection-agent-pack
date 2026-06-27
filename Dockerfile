@@ -19,7 +19,9 @@ COPY --from=build /app/publish .
 RUN addgroup --system mmprotect && adduser --system --ingroup mmprotect mmprotect
 USER mmprotect
 
-ENV ASPNETCORE_URLS=http://+:8080
+# Configurable listen port — override at runtime: -e ASPNETCORE_HTTP_PORTS=9090
+# Compose / docker run: set MMPROTECT_PORT which controls both host mapping and ASPNETCORE_HTTP_PORTS.
+ENV ASPNETCORE_HTTP_PORTS=8080
 EXPOSE 8080
 
 ENTRYPOINT ["dotnet", "MmProtect.LicenseServer.dll"]

@@ -1,0 +1,37 @@
+# Build context for the Dockerfile only needs src/LicenseServer/.
+# Everything else is excluded to keep the build context small and
+# prevent accidentally copying secrets into the image.
+
+# Test projects and tooling
+src/LicenseServer.Tests/
+src/EncoderCli/
+src/EncoderCli.Tests/
+src/PhpDecoderLoader/
+
+# Project files that aren't needed in the image
+tests/
+docs/
+database/
+scripts/
+configs/
+jenkins/
+.github/
+docker/
+artifacts/
+.claude/
+
+# Never include secrets or local config in the image
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+**/signing-private*
+**/dev-buildkey*
+
+# Git and IDE
+.git/
+.gitignore
+.gitattributes
+*.md
