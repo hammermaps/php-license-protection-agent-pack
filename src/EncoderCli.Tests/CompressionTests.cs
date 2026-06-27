@@ -146,4 +146,50 @@ public sealed class CompressionTests
 
         Assert.Contains("\"compression\":\"lz4\"", json);
     }
+
+    // ── MmencContainer.Assemble (second-pass manifest hash) ──────────────
+
+    [Fact]
+    public void Assemble_WithUpdatedManifestHash_UpdatesHeaderOnlyNotCiphertext()
+    {
+        byte[] plain = SysEnc.UTF8.GetBytes("<?php echo 1; ?>");
+        byte[] fileKey = new byte[32];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(fileKey);
+
+        var header = new MmencHeader
+        {
+            Format = "MMENC1", FormatVersion = 1,
+            ProjectId = "p", CustomerId = "c", LicenseId = "l",
+            BuildId = "b", FileId = "f",
+            RelativePath = "a.php", PathHash = "sha256:x",
+            PlainHash = "sha256:y", Algorithm = "AES-256-GCM",
+            Kdf = "HKDF-SHA256", KeyId = "k",
+            ManifestHash = "",   // placeholder for first-pass output
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+
+        var container = MmencContainer.Create(plain, fileKey, header);
+
+        // First-pass header must have empty manifestHash
+        var origHeaderLen = int.Parse(SysEnc.ASCII.GetString(container.FileBytes, 7, 8));
+        var origJson = SysEnc.UTF8.GetString(container.FileBytes, 16, origHeaderLen);
+        Assert.Contains("\"manifestHash\":\"\"", origJson);
+
+        // Second pass: update manifest hash and re-assemble
+        header.ManifestHash = "sha256:abcdef1234567890";
+        var reassembled = MmencContainer.Assemble(header, container.Ciphertext);
+
+        // Magic and format preserved
+        Assert.Equal("MMENC1", SysEnc.ASCII.GetString(reassembled, 0, 6));
+
+        // Updated header contains the new manifest hash
+        var newHeaderLen = int.Parse(SysEnc.ASCII.GetString(reassembled, 7, 8));
+        var newJson = SysEnc.UTF8.GetString(reassembled, 16, newHeaderLen);
+        Assert.Contains("\"manifestHash\":\"sha256:abcdef1234567890\"", newJson);
+
+        // Ciphertext bytes are identical — only the header changed
+        var origCipher = container.FileBytes[(16 + origHeaderLen)..];
+        var newCipher  = reassembled[(16 + newHeaderLen)..];
+        Assert.Equal(origCipher, newCipher);
+    }
 }

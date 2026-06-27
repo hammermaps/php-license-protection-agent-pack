@@ -402,7 +402,7 @@ Key routing rules:
 
 ---
 
-## Implementierungsstand (Stand 2026-06-27, zuletzt aktualisiert 2026-06-27)
+## Implementierungsstand (Stand 2026-06-27, zuletzt aktualisiert 2026-06-28)
 
 ### LicenseServer (`src/LicenseServer/`) — **produktionsbereit (Krypto konfigurierbar)**
 
@@ -456,19 +456,11 @@ scripts/linux/gen-signing-keys.sh /etc/mmprotect/
 # → Security:SigningPrivateKeyFile = "/etc/mmprotect/signing-private.pem"
 ```
 
-**Bekannte Lücken / TODO für Produktion:**
-
-| Problem | Priorität |
-|---|---|
-| `JsonCanonical.Serialize` sortiert Properties nicht (kein echter Canonical-JSON) | MITTEL |
-| Keine PHP-Syntax-Prüfung vor Verschlüsselung (Encoder) | NIEDRIG |
-| `ManifestHash` in per-Datei-Header bleibt `"pending"` (zweiter Schreibdurchlauf fehlt) | HOCH (Encoder) |
-
-**Tests:** `LicenseServer.Tests/` – **41 Tests** via `WebApplicationFactory` + SQLite:
+**Tests:** `LicenseServer.Tests/` – **44 Tests** via `WebApplicationFactory` + SQLite:
 - `SmokeTests.cs` (33): Health, Customer-Dedup, Project, Encoder-Flow, Runtime-Lease, Security-Gates (Revocation, Constraints Hostname/Domain/IP, Admin-API-Coverage)
-- `CryptoTests.cs` (8): KEK AES-256-GCM roundtrip/nonce/wrong-key, ECDSA-P256 sign+verify, HMAC-Fallback
+- `CryptoTests.cs` (11): KEK AES-256-GCM roundtrip/nonce/wrong-key, ECDSA-P256 sign+verify, HMAC-Fallback, JsonCanonical sortiert Properties ordinal, kompaktes camelCase, deterministisch
 
-Alle 41 bestehen.
+Alle 44 bestehen.
 
 ---
 
@@ -480,7 +472,7 @@ Alle 41 bestehen.
 |---|---|
 | `Program.cs` | Dispatcher für `validate`/`encode`/`manifest`/`clean`/`encode-dir` |
 | `CliArgs.cs` | Argument-Parser inkl. `--source`, `--output`, `--mmignore`, `--compress`, `--dev`, `--dry-run` |
-| `Configuration/EncoderConfig.cs` | Config-Modell (JSON + XML); `DefaultOptions.Compression` für LZ4 |
+| `Configuration/EncoderConfig.cs` | Config-Modell (JSON + XML); `DefaultOptions.Compression` für LZ4, `DefaultOptions.PhpBinary` für Syntax-Check |
 | `Configuration/EncoderConfigLoader.cs` | JSON via `System.Text.Json`, XML via `XDocument` |
 | `Encoding/CryptoPrimitives.cs` | HKDF-SHA256 (Salt `SHA-256("MMProtect-HKDF-v1")`) + SHA-256-Hashing |
 | `Encoding/FileSelector.cs` | Glob-Matching mit `**`-Support, include/exclude; `exclude` gilt auch für `copyPlain` |
@@ -501,14 +493,9 @@ Alle 41 bestehen.
 - `--compress lz4|none`: LZ4-Komprimierung aktivieren/deaktivieren
 - `--dry-run`: nur Plan ausgeben, nichts schreiben
 
-**Bekannte Lücken / TODO:**
+**`DefaultOptions.PhpBinary`:** Optionaler Pfad zur PHP-Binary für Syntax-Check vor der Verschlüsselung (z.B. `/usr/bin/php8.4`). Wenn gesetzt, bricht der Encoder mit Fehlermeldung ab, wenn eine Datei einen PHP-Syntaxfehler enthält.
 
-| Problem | Priorität |
-|---|---|
-| `ManifestHash` in per-Datei-Header bleibt `"pending"` (zweiter Schreibdurchlauf fehlt) | HOCH |
-| Keine PHP-Syntax-Prüfung vor Verschlüsselung | NIEDRIG |
-
-**Tests:** `EncoderCli.Tests/` – **57 Tests** (Glob/FileSelector + MmIgnore + Compression + Obfuscator). Alle 57 bestehen.
+**Tests:** `EncoderCli.Tests/` – **58 Tests** (Glob/FileSelector + MmIgnore + Compression + Obfuscator + Assemble). Alle 58 bestehen.
 
 ---
 
@@ -600,11 +587,11 @@ scripts/linux/build-decoder-php85.sh
 
 | Komponente | Reifegrad | Offene Punkte für Produktion |
 |---|---|---|
-| License Server | Produktionsbereit | `Security:KeyEncryptionKey` + `SigningPrivateKeyFile` setzen; Canonical-JSON |
-| Encoder CLI | Vollständig lauffähig | ManifestHash-Update nach Encoding-Durchlauf |
+| License Server | Produktionsbereit | `Security:KeyEncryptionKey` + `SigningPrivateKeyFile` setzen |
+| Encoder CLI | Produktionsbereit | – |
 | PHP Decoder/Loader | Vollständig implementiert | – |
 | Docker / Compose | Produktionsbereit — alle Parameter per Env-Var konfigurierbar | – |
-| LicenseServer.Tests | 41/41 (33 SmokeTests + 8 CryptoTests) | – |
-| EncoderCli.Tests | 57/57 (Glob + MmIgnore + Compression + Obfuscator) | – |
+| LicenseServer.Tests | 44/44 (33 SmokeTests + 11 CryptoTests) | – |
+| EncoderCli.Tests | 58/58 (Glob + MmIgnore + Compression + Obfuscator + Assemble) | – |
 | E2E-Integrationstest | 7/7 (PHP 8.5 skip) | PHP 8.5: `sudo apt install php8.5-dev` + build |
 | Demo-Projekt-Tests | 31/31 (PHP 8.5 skip) | PHP 8.5: siehe oben |

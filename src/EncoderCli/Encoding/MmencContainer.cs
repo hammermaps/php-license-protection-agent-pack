@@ -58,7 +58,6 @@ public sealed class MmencContainer
 
         if (!string.IsNullOrWhiteSpace(signingKeyFile) && File.Exists(signingKeyFile))
         {
-            /* Week 4: ECDSA-P256 DER signature (matches loader's EVP_DigestVerify) */
             using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             ecdsa.ImportFromPem(File.ReadAllText(signingKeyFile));
             var sig = ecdsa.SignData(sigData, HashAlgorithmName.SHA256,
@@ -67,10 +66,23 @@ public sealed class MmencContainer
         }
         else
         {
-            /* Demo fallback: SHA-256 hash (loader falls back to same when no pubkey configured) */
+            /* Demo fallback: SHA-256 hash (loader accepts when no pubkey is configured) */
             header.Signature = Convert.ToBase64String(SHA256.HashData(sigData));
         }
 
+        return new MmencContainer
+        {
+            FileBytes = Assemble(header, cipher),
+            Ciphertext = cipher
+        };
+    }
+
+    /// <summary>
+    /// Assembles an MMENC1 file from an already-signed/encrypted header and ciphertext.
+    /// Used for the second write pass after the manifest hash is known.
+    /// </summary>
+    public static byte[] Assemble(MmencHeader header, byte[] ciphertext)
+    {
         var headerJson = JsonSerializer.Serialize(header, JsonOptions.Compact);
         var headerBytes = System.Text.Encoding.UTF8.GetBytes(headerJson);
         var lengthLine = headerBytes.Length.ToString("D8");
@@ -80,13 +92,8 @@ public sealed class MmencContainer
         ms.Write(System.Text.Encoding.ASCII.GetBytes(lengthLine));
         ms.WriteByte((byte)'\n');
         ms.Write(headerBytes);
-        ms.Write(cipher);
-
-        return new MmencContainer
-        {
-            FileBytes = ms.ToArray(),
-            Ciphertext = cipher
-        };
+        ms.Write(ciphertext);
+        return ms.ToArray();
     }
 }
 

@@ -57,6 +57,8 @@ public sealed class LocalDevEncoder
         }
 
         var manifestFiles = new List<ManifestFileDto>();
+        // Pending list for second write pass after manifest hash is known
+        var pendingFiles = new List<(string OutPath, MmencHeader Header, byte[] Ciphertext)>();
 
         foreach (var (absPath, action) in files)
         {
@@ -84,34 +86,34 @@ public sealed class LocalDevEncoder
             var plainHash = "sha256:" + Hashing.Sha256Hex(plain);
             var fileKey = CryptoPrimitives.HkdfSha256(buildKey, $"{buildId}:{fileId}:{pathHash}", 32);
 
-            var encrypted = MmencContainer.Create(
-                plain,
-                fileKey,
-                new MmencHeader
-                {
-                    Format = "MMENC1",
-                    FormatVersion = 1,
-                    ProjectId = projectId,
-                    CustomerId = customerId,
-                    LicenseId = licenseId,
-                    BuildId = buildId,
-                    FileId = fileId,
-                    RelativePath = rel,
-                    PathHash = pathHash,
-                    PlainHash = plainHash,
-                    Algorithm = "AES-256-GCM",
-                    Compression = string.IsNullOrWhiteSpace(compression) || compression == "none"
-                        ? null : compression,
-                    LicenseServer = string.IsNullOrWhiteSpace(licenseServerUrl)
-                        ? null : licenseServerUrl.TrimEnd('/'),
-                    Kdf = "HKDF-SHA256",
-                    KeyId = keyId,
-                    ManifestHash = "pending",
-                    CreatedAt = DateTimeOffset.UtcNow
-                },
+            var fileHeader = new MmencHeader
+            {
+                Format = "MMENC1",
+                FormatVersion = 1,
+                ProjectId = projectId,
+                CustomerId = customerId,
+                LicenseId = licenseId,
+                BuildId = buildId,
+                FileId = fileId,
+                RelativePath = rel,
+                PathHash = pathHash,
+                PlainHash = plainHash,
+                Algorithm = "AES-256-GCM",
+                Compression = string.IsNullOrWhiteSpace(compression) || compression == "none"
+                    ? null : compression,
+                LicenseServer = string.IsNullOrWhiteSpace(licenseServerUrl)
+                    ? null : licenseServerUrl.TrimEnd('/'),
+                Kdf = "HKDF-SHA256",
+                KeyId = keyId,
+                ManifestHash = "",   // placeholder — filled in second pass
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+
+            var encrypted = MmencContainer.Create(plain, fileKey, fileHeader,
                 signingKeyFile: signing?.PrivateKeyFile);
 
-            await File.WriteAllBytesAsync(outPath, encrypted.FileBytes);
+            // Don't write yet — defer until manifest hash is known
+            pendingFiles.Add((outPath, fileHeader, encrypted.Ciphertext));
             manifestFiles.Add(new ManifestFileDto(
                 fileId, rel, pathHash, plainHash,
                 "sha256:" + Hashing.Sha256Hex(encrypted.Ciphertext),
@@ -128,7 +130,37 @@ public sealed class LocalDevEncoder
         var devKeyPath = Path.Combine(protectDir, "dev-buildkey.b64");
         await File.WriteAllTextAsync(devKeyPath, Convert.ToBase64String(buildKey) + "\n");
 
-        // Minimal manifest
+        // Compute manifest hash from compact camelCase JSON with empty hash/sig fields
+        var manifestForHash = new
+        {
+            format = "MMENC-MANIFEST-1",
+            dev = true,
+            projectId,
+            customerId,
+            licenseId,
+            buildId,
+            version = "0.0.0-dev",
+            algorithm = "AES-256-GCM",
+            kdf = "HKDF-SHA256",
+            files = manifestFiles.Select(f => new
+            {
+                f.FileId, f.RelativePath, f.PathHash, f.PlainHash,
+                f.CipherHash, f.Algorithm, f.Kdf
+            }).ToList(),
+            manifestHash = "",
+            signature = ""
+        };
+        var manifestHashValue = "sha256:" + Hashing.Sha256Hex(
+            System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(manifestForHash, JsonOptions.Compact)));
+
+        // Second pass: write files with the correct manifestHash
+        foreach (var (outPath, fileHeader, ciphertext) in pendingFiles)
+        {
+            fileHeader.ManifestHash = manifestHashValue;
+            await File.WriteAllBytesAsync(outPath, MmencContainer.Assemble(fileHeader, ciphertext));
+        }
+
+        // Minimal manifest (with actual hash)
         var manifest = new
         {
             format = "MMENC-MANIFEST-1",
@@ -145,7 +177,7 @@ public sealed class LocalDevEncoder
                 f.FileId, f.RelativePath, f.PathHash, f.PlainHash,
                 f.CipherHash, f.Algorithm, f.Kdf
             }),
-            manifestHash = "",
+            manifestHash = manifestHashValue,
             signature = ""
         };
 

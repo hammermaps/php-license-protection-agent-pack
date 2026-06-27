@@ -136,4 +136,50 @@ public sealed class CryptoTests
         var expected = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(data)));
         Assert.Equal(expected, sig);
     }
+
+    /* ── JsonCanonical: stable sorted serialization ──────────────────────── */
+
+    [Fact]
+    public void JsonCanonical_Serialize_SortsPropertiesAlphabetically()
+    {
+        // Anonymous type with properties declared in reverse-alphabetical order
+        var obj = new { z = "last", m = "middle", a = "first", nested = new { b = 2, a = 1 } };
+        var json = JsonCanonical.Serialize(obj);
+
+        // Top-level order must be: a, m, nested, z
+        int aIdx    = json.IndexOf("\"a\"",      StringComparison.Ordinal);
+        int mIdx    = json.IndexOf("\"m\"",      StringComparison.Ordinal);
+        int nestIdx = json.IndexOf("\"nested\"", StringComparison.Ordinal);
+        int zIdx    = json.IndexOf("\"z\"",      StringComparison.Ordinal);
+
+        Assert.True(aIdx    < mIdx,    "\"a\" must precede \"m\"");
+        Assert.True(mIdx    < nestIdx, "\"m\" must precede \"nested\"");
+        Assert.True(nestIdx < zIdx,    "\"nested\" must precede \"z\"");
+
+        // Nested object must also be sorted: a before b
+        var nestedPart  = json[nestIdx..];
+        int aInNested   = nestedPart.IndexOf("\"a\"", StringComparison.Ordinal);
+        int bInNested   = nestedPart.IndexOf("\"b\"", StringComparison.Ordinal);
+        Assert.True(aInNested < bInNested, "nested \"a\" must precede nested \"b\"");
+    }
+
+    [Fact]
+    public void JsonCanonical_Serialize_ProducesCompactCamelCaseJson()
+    {
+        var json = JsonCanonical.Serialize(new { FooBar = "val" });
+        // No whitespace, camelCase property name
+        Assert.DoesNotContain(' ', json);
+        Assert.DoesNotContain('\n', json);
+        Assert.Contains("\"fooBar\"", json);
+    }
+
+    [Fact]
+    public void JsonCanonical_Serialize_SameObjectProducesSameString()
+    {
+        // Critical for stable ECDSA signatures: identical input must yield identical output
+        var obj = new { projectId = "proj_123", licenseId = "lic_456", buildId = "build_789" };
+        var json1 = JsonCanonical.Serialize(obj);
+        var json2 = JsonCanonical.Serialize(obj);
+        Assert.Equal(json1, json2);
+    }
 }

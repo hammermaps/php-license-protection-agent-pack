@@ -70,6 +70,12 @@ public sealed class DefaultOptions
 
     /// <summary>When true, PHP source is obfuscated (comments stripped, vars renamed) before encryption.</summary>
     public bool Obfuscate { get; set; } = false;
+
+    /// <summary>
+    /// Optional path to the PHP binary used for syntax-checking source files before encryption
+    /// (e.g. "/usr/bin/php8.4" or "php"). When null/empty, the check is skipped.
+    /// </summary>
+    public string? PhpBinary { get; set; }
 }
 
 /// <summary>

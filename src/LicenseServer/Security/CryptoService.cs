@@ -155,10 +155,50 @@ public static class Ids
 
 public static class JsonCanonical
 {
+    private static readonly JsonSerializerOptions _opts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = false
+    };
+
+    /// <summary>
+    /// Serializes <paramref name="value"/> to canonical JSON: camelCase, no whitespace,
+    /// properties sorted ordinal-alphabetically at every nesting level.
+    /// Required for stable ECDSA signatures over JSON payloads.
+    /// </summary>
     public static string Serialize<T>(T value)
-        => JsonSerializer.Serialize(value, new JsonSerializerOptions
+    {
+        using var doc = JsonSerializer.SerializeToDocument(value, _opts);
+        using var ms = new MemoryStream();
+        using var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = false });
+        WriteElementSorted(doc.RootElement, writer);
+        writer.Flush();
+        return Encoding.UTF8.GetString(ms.ToArray());
+    }
+
+    private static void WriteElementSorted(JsonElement element, Utf8JsonWriter writer)
+    {
+        switch (element.ValueKind)
         {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            WriteIndented = false
-        });
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var prop in element.EnumerateObject()
+                                            .OrderBy(p => p.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(prop.Name);
+                    WriteElementSorted(prop.Value, writer);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                    WriteElementSorted(item, writer);
+                writer.WriteEndArray();
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
+    }
 }

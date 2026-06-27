@@ -104,10 +104,17 @@ public sealed class ProjectEncoder
 
         var buildKey = Convert.FromBase64String(build.BuildKey);
         var manifestFiles = new List<ManifestFileDto>();
+        // Pending list for second write pass after manifest hash is known
+        var pendingFiles = new List<(string OutPath, MmencHeader Header, byte[] Ciphertext)>();
 
         foreach (var path in files)
         {
             var relative = Path.GetRelativePath(sourceRoot, path).Replace('\\', '/');
+
+            // Optional PHP syntax check before encryption
+            if (!string.IsNullOrWhiteSpace(config.Defaults.PhpBinary))
+                PhpLint(config.Defaults.PhpBinary, path, relative);
+
             var plain = await File.ReadAllBytesAsync(path);
             if (config.Defaults.Obfuscate)
             {
@@ -120,36 +127,36 @@ public sealed class ProjectEncoder
             var plainHash = "sha256:" + Hashing.Sha256Hex(plain);
             var fileKey = CryptoPrimitives.HkdfSha256(buildKey, $"{build.BuildId}:{fileId}:{pathHash}", 32);
 
-            var encrypted = MmencContainer.Create(
-                plain,
-                fileKey,
-                new MmencHeader
-                {
-                    Format = "MMENC1",
-                    FormatVersion = 1,
-                    ProjectId = serverProject.ProjectId,
-                    CustomerId = customer.CustomerId,
-                    LicenseId = license.LicenseId,
-                    BuildId = build.BuildId,
-                    FileId = fileId,
-                    RelativePath = relative,
-                    PathHash = pathHash,
-                    PlainHash = plainHash,
-                    Algorithm = config.Defaults.Algorithm,
-                    Compression = string.IsNullOrWhiteSpace(config.Defaults.Compression) || config.Defaults.Compression == "none"
-                        ? null : config.Defaults.Compression,
-                    LicenseServer = string.IsNullOrWhiteSpace(config.LicenseServer.BaseUrl)
-                        ? null : config.LicenseServer.BaseUrl.TrimEnd('/'),
-                    Kdf = "HKDF-SHA256",
-                    KeyId = build.KeyId,
-                    ManifestHash = "pending",
-                    CreatedAt = DateTimeOffset.UtcNow
-                },
+            var fileHeader = new MmencHeader
+            {
+                Format = "MMENC1",
+                FormatVersion = 1,
+                ProjectId = serverProject.ProjectId,
+                CustomerId = customer.CustomerId,
+                LicenseId = license.LicenseId,
+                BuildId = build.BuildId,
+                FileId = fileId,
+                RelativePath = relative,
+                PathHash = pathHash,
+                PlainHash = plainHash,
+                Algorithm = config.Defaults.Algorithm,
+                Compression = string.IsNullOrWhiteSpace(config.Defaults.Compression) || config.Defaults.Compression == "none"
+                    ? null : config.Defaults.Compression,
+                LicenseServer = string.IsNullOrWhiteSpace(config.LicenseServer.BaseUrl)
+                    ? null : config.LicenseServer.BaseUrl.TrimEnd('/'),
+                Kdf = "HKDF-SHA256",
+                KeyId = build.KeyId,
+                ManifestHash = "",   // placeholder — filled in second pass
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+
+            var encrypted = MmencContainer.Create(plain, fileKey, fileHeader,
                 signingKeyFile: config.Defaults.Signing?.PrivateKeyFile);
 
             var outPath = Path.Combine(outputRoot, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
-            await File.WriteAllBytesAsync(outPath, encrypted.FileBytes);
+            // Don't write yet — defer until manifest hash is known
+            pendingFiles.Add((outPath, fileHeader, encrypted.Ciphertext));
 
             manifestFiles.Add(new ManifestFileDto(
                 fileId,
@@ -192,7 +199,12 @@ public sealed class ProjectEncoder
             "",
             "");
 
-        var manifestHash = "sha256:" + Hashing.Sha256Hex(JsonSerializer.SerializeToUtf8Bytes(manifest with { ManifestHash = "", Signature = "" }));
+        // Hash over compact camelCase JSON (same format as the written manifest) with
+        // empty manifestHash and signature fields so the hash is deterministic.
+        var manifestHash = "sha256:" + Hashing.Sha256Hex(
+            JsonSerializer.SerializeToUtf8Bytes(
+                manifest with { ManifestHash = "", Signature = "" },
+                JsonOptions.Compact));
         var sign = await _client.SignManifestAsync(build.BuildId, new
         {
             manifestHash,
@@ -204,6 +216,13 @@ public sealed class ProjectEncoder
             ManifestHash = manifestHash,
             Signature = sign.ManifestSignature
         };
+
+        // Second pass: write all encrypted files with the correct manifestHash
+        foreach (var (outPath, fileHeader, ciphertext) in pendingFiles)
+        {
+            fileHeader.ManifestHash = manifestHash;
+            await File.WriteAllBytesAsync(outPath, MmencContainer.Assemble(fileHeader, ciphertext));
+        }
 
         var protectDir = Path.Combine(outputRoot, ".mmprotect");
         Directory.CreateDirectory(protectDir);
@@ -225,14 +244,44 @@ public sealed class ProjectEncoder
 
         if (config.Defaults.DevMode)
         {
-            // Week-1 loader smoke-test: write buildKey so the loader can decrypt
-            // without an HTTP lease call. NEVER enable in production.
+            // Dev-only: write buildKey so the loader can decrypt without an HTTP lease.
+            // NEVER enable in production.
             var devKeyPath = Path.Combine(protectDir, "dev-buildkey.b64");
             await File.WriteAllTextAsync(devKeyPath, build.BuildKey + "\n");
             Console.WriteLine($"[DEV] dev-buildkey.b64 geschrieben → {devKeyPath}");
         }
 
         Console.WriteLine($"Fertig. Geschützte Dateien: {manifestFiles.Count}");
+    }
+
+    private static void PhpLint(string phpBinary, string filePath, string relativePath)
+    {
+        string output;
+        int exitCode;
+        try
+        {
+            using var proc = new System.Diagnostics.Process();
+            proc.StartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = phpBinary,
+                Arguments = $"-l \"{filePath}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            proc.Start();
+            output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+            exitCode = proc.ExitCode;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            Console.Error.WriteLine($"[WARN] PhpBinary '{phpBinary}' not found — skipping syntax check");
+            return;
+        }
+        if (exitCode != 0)
+            throw new InvalidOperationException($"PHP syntax error in '{relativePath}':\n{output.Trim()}");
     }
 
     private static void CopyPlainFiles(string sourceRoot, string outputRoot, List<string> copyPlain, List<string> exclude, bool verbose)
