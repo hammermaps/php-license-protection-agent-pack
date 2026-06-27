@@ -2,8 +2,10 @@
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/MmProtect.LicenseServer.deps.json
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/MmProtect.LicenseServer.runtimeconfig.json
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/appsettings.json
+/home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/MmProtect.LicenseServer.staticwebassets.runtime.json
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/MmProtect.LicenseServer
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/MvcTestingAppManifest.json
+/home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/LicenseServer.Tests.staticwebassets.runtime.json
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/xunit.runner.visualstudio.testadapter.dll
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/xunit.runner.reporters.netcoreapp10.dll
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Release/net8.0/xunit.runner.utility.netcoreapp10.dll

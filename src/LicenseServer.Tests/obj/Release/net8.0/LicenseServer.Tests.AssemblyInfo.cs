@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("LicenseServer.Tests")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+378bd45a863ddbfce78621fec894bc24f531c5d7")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e46dfe99dce4b9f71b0f898608ecd1fcaddfed96")]
 [assembly: System.Reflection.AssemblyProductAttribute("LicenseServer.Tests")]
 [assembly: System.Reflection.AssemblyTitleAttribute("LicenseServer.Tests")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
