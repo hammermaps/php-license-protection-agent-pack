@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  # ── .NET: Build + Test + Publish ─────────────────────────────────────────────
+  dotnet:
+    name: .NET Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # Restore each project individually because the test projects are not
+      # included in src/MmProtect.sln.
+      - name: Restore
+        run: |
+          dotnet restore src/LicenseServer/LicenseServer.csproj
+          dotnet restore src/EncoderCli/EncoderCli.csproj
+          dotnet restore src/LicenseServer.Tests/LicenseServer.Tests.csproj
+          dotnet restore src/EncoderCli.Tests/EncoderCli.Tests.csproj
+
+      - name: Build
+        run: |
+          dotnet build src/LicenseServer/LicenseServer.csproj  -c Release --no-restore
+          dotnet build src/EncoderCli/EncoderCli.csproj        -c Release --no-restore
+
+      # 41 Tests: 33 SmokeTests + 8 CryptoTests (WebApplicationFactory + SQLite)
+      - name: Test – LicenseServer (41)
+        run: >
+          dotnet test src/LicenseServer.Tests/LicenseServer.Tests.csproj
+          -c Release --no-restore --verbosity normal
+          --logger "trx;LogFileName=licenseserver.trx"
+          --results-directory testresults/
+
+      # 57 Tests: Glob / MmIgnore / Compression / Obfuscator
+      - name: Test – EncoderCli (57)
+        run: >
+          dotnet test src/EncoderCli.Tests/EncoderCli.Tests.csproj
+          -c Release --no-restore --verbosity normal
+          --logger "trx;LogFileName=encodercli.trx"
+          --results-directory testresults/
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: testresults/*.trx
+          retention-days: 14
+
+      # Publish release artifacts
+      - name: Publish – LicenseServer
+        run: >
+          dotnet publish src/LicenseServer/LicenseServer.csproj
+          -c Release -r linux-x64 --self-contained false
+          -o artifacts/server/linux-x64
+
+      - name: Publish – EncoderCli
+        run: >
+          dotnet publish src/EncoderCli/EncoderCli.csproj
+          -c Release -r linux-x64 --self-contained false
+          -o artifacts/encoder/linux-x64
+
+      - name: Upload – Server
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmprotect-server-linux-x64
+          path: artifacts/server/linux-x64/
+          retention-days: 30
+
+      - name: Upload – Encoder
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmprotect-encoder-linux-x64
+          path: artifacts/encoder/linux-x64/
+          retention-days: 30
+
+  # ── PHP Decoder/Loader: C Extension ──────────────────────────────────────────
+  decoder:
+    name: Decoder PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    # PHP 8.5 is optional — don't fail the whole CI if it's unavailable
+    continue-on-error: ${{ matrix.php == '8.5' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php: "8.4"
+            pkg: "php8.4-dev php8.4-cli"
+            phpize: phpize8.4
+            php_config: php-config8.4
+            php_bin: php8.4
+            so_name: mmloader.so
+
+          - php: "8.5"
+            pkg: "php8.5-dev php8.5-cli"
+            phpize: phpize8.5
+            php_config: php-config8.5
+            php_bin: php8.5
+            so_name: mmloader-php85.so
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add ondrej/php PPA
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository ppa:ondrej/php -y
+          sudo apt-get update -qq
+
+      - name: Install PHP ${{ matrix.php }} dev headers
+        run: sudo apt-get install -y ${{ matrix.pkg }} libssl-dev libcurl4-openssl-dev
+
+      - name: Build mmloader.so (PHP ${{ matrix.php }})
+        working-directory: src/PhpDecoderLoader
+        run: |
+          ${{ matrix.phpize }}
+          ./configure --enable-mmloader --with-php-config=${{ matrix.php_config }}
+          make -j$(nproc)
+          mkdir -p ../../artifacts/decoder/linux-x64
+          cp modules/mmloader.so ../../artifacts/decoder/linux-x64/${{ matrix.so_name }}
+
+      - name: Smoke-test extension
+        run: |
+          ${{ matrix.php_bin }} \
+            -d extension=artifacts/decoder/linux-x64/${{ matrix.so_name }} \
+            -r 'echo extension_loaded("mmloader") ? "mmloader OK\n" : "FAIL\n";'
+
+      - name: Upload – Decoder PHP ${{ matrix.php }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmprotect-decoder-linux-x64-php${{ matrix.php }}
+          path: artifacts/decoder/linux-x64/${{ matrix.so_name }}
+          retention-days: 30
