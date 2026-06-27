@@ -1,4 +1,6 @@
 **MMProtect – PHP License Protection System**  
+[![CodeQL](https://github.com/hammermaps/php-license-protection-agent-pack/actions/workflows/codeql.yml/badge.svg)](https://github.com/hammermaps/php-license-protection-agent-pack/actions/workflows/codeql.yml)  
+
 Ein vollständiges Schutzsystem für PHP-8.4/8.5-Projektcode: verschlüsseln, lizenzieren, zur Laufzeit entschlüsseln.  
 **Komponenten**  
 | | | |  
