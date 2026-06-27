@@ -1,0 +1,26 @@
+# phpize / configure generated files
+autom4te.cache/
+build/
+config.h
+config.h.in
+config.h.in~
+config.log
+config.nice
+config.status
+configure
+libtool
+Makefile
+Makefile.fragments
+Makefile.objects
+
+# Compiled objects and libraries
+*.o
+*.lo
+*.la
+*.so
+*.dep
+.libs/
+modules/
+
+# configure backup
+configure~

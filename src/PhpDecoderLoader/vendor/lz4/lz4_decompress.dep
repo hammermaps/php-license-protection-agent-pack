@@ -1,3 +1,0 @@
-vendor/lz4/lz4_decompress.lo: \
- /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/PhpDecoderLoader/vendor/lz4/lz4_decompress.c \
- /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/PhpDecoderLoader/vendor/lz4/lz4_decompress.h
