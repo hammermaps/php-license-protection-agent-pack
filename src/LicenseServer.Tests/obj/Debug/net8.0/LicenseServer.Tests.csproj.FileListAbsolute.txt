@@ -467,3 +467,5 @@
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/obj/Debug/net8.0/LicenseServer.Tests.pdb
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/obj/Debug/net8.0/LicenseServer.Tests.genruntimeconfig.cache
 /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/obj/Debug/net8.0/ref/LicenseServer.Tests.dll
+/home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Debug/net8.0/MmProtect.LicenseServer.staticwebassets.runtime.json
+/home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/src/LicenseServer.Tests/bin/Debug/net8.0/LicenseServer.Tests.staticwebassets.runtime.json
