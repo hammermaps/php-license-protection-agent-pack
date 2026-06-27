@@ -361,6 +361,32 @@ public sealed class SmokeTests : IDisposable
     }
 
     [Fact]
+    public async Task RuntimeLease_AllowedDomain_Granted()
+    {
+        var (_, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
+            "cref-dom-ok", "proj-dom-ok", "MM-DOMOK-001",
+            constraints: new { allowedDomains = new[] { "example.com" } });
+
+        var resp = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash,
+            domain: "example.com");
+        Assert.Equal(System.Net.HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task RuntimeLease_BlockedDomain_Rejected()
+    {
+        var (_, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
+            "cref-dom-bad", "proj-dom-bad", "MM-DOMBAD-001",
+            constraints: new { allowedDomains = new[] { "example.com" } });
+
+        var resp = await RequestLeaseAsync(leaseClient, licenseId, buildId, manifestHash,
+            domain: "attacker.com");
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("LEASE_DENIED", body);
+    }
+
+    [Fact]
     public async Task AdminRevoke_License_BlocksLease()
     {
         var (_, leaseClient, licenseId, buildId, manifestHash) = await SetupBuildAsync(
@@ -392,7 +418,8 @@ public sealed class SmokeTests : IDisposable
             string custRef, string projKey, string licKey,
             string validFrom = "2026-01-01T00:00:00Z",
             string? validUntil = "2030-01-01T00:00:00Z",
-            int maxActivations = 5)
+            int maxActivations = 5,
+            object? constraints = null)
     {
         var buildClient = _factory.CreateClient();
         buildClient.DefaultRequestHeaders.Authorization =
@@ -415,7 +442,8 @@ public sealed class SmokeTests : IDisposable
                 validFrom,
                 validUntil,
                 maxActivations,
-                features = Array.Empty<string>()
+                features = Array.Empty<string>(),
+                constraints
             });
 
         var build = await PostJsonViaAsync<BuildStartDto>(buildClient,
@@ -446,7 +474,8 @@ public sealed class SmokeTests : IDisposable
         string licenseId,
         string buildId,
         string manifestHash,
-        string? fingerprint = null)
+        string? fingerprint = null,
+        string? domain = null)
     {
         return await client.PostAsJsonAsync("/api/v1/runtime/lease", new
         {
@@ -459,7 +488,8 @@ public sealed class SmokeTests : IDisposable
             loaderVersion = "0.1.0",
             phpVersion = "8.4.0",
             sapi = "cli",
-            nonce = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16))
+            nonce = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)),
+            domain
         });
     }
 

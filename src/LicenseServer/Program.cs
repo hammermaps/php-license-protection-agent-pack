@@ -485,7 +485,7 @@ app.MapPost("/api/v1/runtime/lease", async (
         return Results.BadRequest(ErrorDto.Create("LICENSE_NOT_YET_VALID", "License is not yet valid."));
     }
 
-    /* License constraints: hostname / IP binding (only validated when sent by loader) */
+    /* License constraints: hostname / domain / IP binding (only validated when sent by loader) */
     if (!string.IsNullOrEmpty(row.ConstraintsJson))
     {
         try
@@ -503,6 +503,17 @@ app.MapPost("/api/v1/runtime/lease", async (
                     await audit.LogAsync("loader", "lease_denied", "license", row.LicenseUid, clientIp,
                         new { reason = "HOSTNAME_NOT_ALLOWED", hostname = request.Hostname });
                     return Results.BadRequest(ErrorDto.Create("LEASE_DENIED", "Hostname not permitted by license."));
+                }
+            }
+
+            if (constraints?.AllowedDomains?.Length > 0 && !string.IsNullOrEmpty(request.Domain))
+            {
+                if (!constraints.AllowedDomains.Any(d =>
+                    string.Equals(d, request.Domain, StringComparison.OrdinalIgnoreCase)))
+                {
+                    await audit.LogAsync("loader", "lease_denied", "license", row.LicenseUid, clientIp,
+                        new { reason = "DOMAIN_NOT_ALLOWED", domain = request.Domain });
+                    return Results.BadRequest(ErrorDto.Create("LEASE_DENIED", "Domain not permitted by license."));
                 }
             }
 
