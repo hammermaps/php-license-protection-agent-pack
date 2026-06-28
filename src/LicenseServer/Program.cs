@@ -160,6 +160,28 @@ else
     app.UseStaticFiles();
 }
 
+// SPA fallback: must run as middleware (before endpoint routing) so that UseStaticFiles
+// can serve .js/.css files first. MapGet("/admin/{**slug}") would be matched by the routing
+// middleware before UseStaticFiles in .NET 6+ WebApplication, causing 404s for assets.
+app.Use(async (ctx, next) =>
+{
+    if (ctx.Request.Path.StartsWithSegments("/admin", StringComparison.OrdinalIgnoreCase))
+    {
+        var slug = ctx.Request.Path.Value?.Substring("/admin".Length).TrimStart('/') ?? "";
+        if (slug.Length == 0 || !Path.HasExtension(slug))
+        {
+            var indexPath = Path.Combine(wwwrootPath, "admin", "index.html");
+            if (File.Exists(indexPath))
+            {
+                ctx.Response.ContentType = "text/html; charset=utf-8";
+                await ctx.Response.SendFileAsync(indexPath);
+                return;
+            }
+        }
+    }
+    await next(ctx);
+});
+
 app.UseRateLimiter();
 
 /* ── Correlation ID ─────────────────────────────────────────────────────── */
@@ -964,24 +986,6 @@ adminApi.MapGet("/audit-log", async (IDbConnectionFactory db, string? entityType
         r.EntityUid, r.IpAddress, r.Details, r.CreatedAt)).ToList();
 
     return Results.Ok(new { events = result });
-});
-
-// SPA fallback: serve admin/index.html for client-side navigation routes.
-// Paths that contain a file extension (e.g. .js, .css, .svg) are NOT intercepted —
-// if UseStaticFiles missed them, return 404 so the browser receives a proper error
-// instead of text/html (which breaks <script type="module"> loading).
-// Uses the same wwwrootPath resolved above for consistency.
-app.MapGet("/admin/{**slug}", (string? slug) =>
-{
-    var path = slug ?? "";
-    if (path.Length > 0 && Path.HasExtension(path))
-        return Results.NotFound();
-
-    var indexPath = Path.Combine(wwwrootPath, "admin", "index.html");
-    if (!File.Exists(indexPath))
-        return Results.NotFound();
-
-    return Results.Content(File.ReadAllText(indexPath), "text/html; charset=utf-8");
 });
 
 app.Run();
