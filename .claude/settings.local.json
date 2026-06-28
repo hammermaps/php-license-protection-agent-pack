@@ -95,7 +95,19 @@
       "Bash(MMTEST_LICENSE_SERVER=http://x MMTEST_TMP_DIR=/tmp php8.4 -d apc.enable_cli=1 -r \"putenv\\('MMTEST_LICENSE_SERVER=http://x'\\); putenv\\('MMTEST_TMP_DIR=/tmp'\\); require 'public/index.php';\")",
       "Bash(bash -n /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/tests/comprehensive/run-comprehensive-test.sh 2>&1)",
       "Bash(grep -n '^\\\\`\\\\`\\\\`json' /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/docs/06-api-contract.md)",
-      "Bash(grep -n '^{$' /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/docs/06-api-contract.md)"
+      "Bash(grep -n '^{$' /home/masterbee/Dokumente/GitHub/php-license-protection-agent-pack/docs/06-api-contract.md)",
+      "Bash(grep -v -E '\\\\.\\(c|h|m4|w32|md\\)$')",
+      "Bash(openssl ecparam *)",
+      "Bash(openssl ec *)",
+      "Bash(rm -f /tmp/ci-test.pem /tmp/ci-test-pub.pem)",
+      "Bash(MMPROTECT_ENCODER_API_KEY_0=testkey MMPROTECT_ADMIN_API_KEY_0=testkey docker compose config --quiet)",
+      "Bash(MMPROTECT_ENCODER_API_KEY_0=testkey MMPROTECT_ADMIN_API_KEY_0=testkey docker compose config)",
+      "Bash(MMPROTECT_ENCODER_API_KEY_0=testkey MMPROTECT_ADMIN_API_KEY_0=testkey MMPROTECT_SIGNING_KEY_HOST_PATH=/etc/mmprotect/signing-private.pem MMPROTECT_PORT=9090 MMPROTECT_KEK=abc123 docker compose config)",
+      "Bash(MMPROTECT_ENCODER_API_KEY_0=testkey MMPROTECT_ADMIN_API_KEY_0=testkey docker compose -f docker-compose.sqlite.yml config)",
+      "Skill(qa)",
+      "mcp__plugin_chrome-devtools-mcp_chrome-devtools__navigate_page",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "Bash(sqlite3 /tmp/mmprotect-seed-test.db)"
     ]
   }
 }

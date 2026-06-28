@@ -2,8 +2,12 @@
 artifacts/
 src/EncoderCli/bin/
 src/EncoderCli/obj/
+src/EncoderCli.Tests/bin/
+src/EncoderCli.Tests/obj/
 src/LicenseServer/bin/
 src/LicenseServer/obj/
+src/LicenseServer.Tests/bin/
+src/LicenseServer.Tests/obj/
 
 # phpize / C extension build system
 src/PhpDecoderLoader/.libs/
@@ -51,3 +55,4 @@ src/AdminUi/node_modules/
 src/AdminUi/dist/
 src/LicenseServer/wwwroot/admin/
 !src/LicenseServer/wwwroot/.gitkeep
+.gstack/
