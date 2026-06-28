@@ -254,3 +254,311 @@ public sealed class PhpObfuscatorTests
         Assert.Contains("// text", result);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PhpOptimizer tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+public sealed class PhpOptimizerTests
+{
+    // ── ParsePasses ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ParsePasses_All_ReturnsAll()
+        => Assert.Equal(OptimizePasses.All, PhpOptimizer.ParsePasses("all"));
+
+    [Fact]
+    public void ParsePasses_None_ReturnsNone()
+        => Assert.Equal(OptimizePasses.None, PhpOptimizer.ParsePasses("none"));
+
+    [Fact]
+    public void ParsePasses_Null_ReturnsAll()
+        => Assert.Equal(OptimizePasses.All, PhpOptimizer.ParsePasses(null));
+
+    [Fact]
+    public void ParsePasses_CommaSeparated()
+    {
+        var r = PhpOptimizer.ParsePasses("constants,deadcode");
+        Assert.True(r.HasFlag(OptimizePasses.ConstantFolding));
+        Assert.True(r.HasFlag(OptimizePasses.DeadCode));
+        Assert.False(r.HasFlag(OptimizePasses.Comments));
+        Assert.False(r.HasFlag(OptimizePasses.Whitespace));
+    }
+
+    // ── Comment stripping ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Optimize_StripComments_LineCommentRemoved()
+    {
+        const string src = "<?php\necho 'hi'; // comment\necho 'bye';";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.Comments);
+        Assert.DoesNotContain("comment", result);
+        Assert.Contains("echo 'hi'", result);
+        Assert.Contains("echo 'bye'", result);
+    }
+
+    [Fact]
+    public void Optimize_StripComments_BlockCommentRemoved()
+    {
+        const string src = "<?php\necho /* skip */ 'hi';";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.Comments);
+        Assert.DoesNotContain("skip", result);
+        Assert.Contains("echo", result);
+    }
+
+    // ── Whitespace collapsing ──────────────────────────────────────────────────
+
+    [Fact]
+    public void Optimize_Whitespace_CollapsedToSingle()
+    {
+        const string src = "<?php\necho   'hello';\nfoo(  );";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.Whitespace);
+        Assert.DoesNotContain("   ", result);
+        Assert.DoesNotContain("  ", result);
+    }
+
+    // ── Constant folding: integer arithmetic ──────────────────────────────────
+
+    [Fact]
+    public void FoldConstants_IntAdd_Folded()
+    {
+        const string src = "<?php\n$x = 5 + 3;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("8", result);
+        Assert.DoesNotContain("5 + 3", result);
+        Assert.DoesNotContain("5+3", result);
+    }
+
+    [Fact]
+    public void FoldConstants_IntSub_Folded()
+    {
+        const string src = "<?php\n$x = 10 - 4;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("6", result);
+    }
+
+    [Fact]
+    public void FoldConstants_IntMul_Folded()
+    {
+        const string src = "<?php\n$x = 6 * 7;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("42", result);
+    }
+
+    [Fact]
+    public void FoldConstants_IntDivExact_Folded()
+    {
+        const string src = "<?php\n$x = 10 / 2;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("5", result);
+        Assert.DoesNotContain("10 / 2", result);
+        Assert.DoesNotContain("10/2", result);
+    }
+
+    [Fact]
+    public void FoldConstants_IntDivNonExact_NotFolded()
+    {
+        // 10/3 is not integer-exact; must not fold (would change type float→int)
+        const string src = "<?php\n$x = 10 / 3;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("/", result);
+    }
+
+    [Fact]
+    public void FoldConstants_IntPow_Folded()
+    {
+        const string src = "<?php\n$x = 2 ** 8;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("256", result);
+    }
+
+    [Fact]
+    public void FoldConstants_IntMod_Folded()
+    {
+        const string src = "<?php\n$x = 7 % 3;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("1", result);
+    }
+
+    [Fact]
+    public void FoldConstants_HexLiteral_Folded()
+    {
+        const string src = "<?php\n$x = 0x0A + 0x06;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("16", result);
+    }
+
+    // ── Constant folding: string concat ───────────────────────────────────────
+
+    [Fact]
+    public void FoldConstants_StringConcat_Folded()
+    {
+        const string src = "<?php\n$x = 'foo' . 'bar';";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("'foobar'", result);
+        Assert.DoesNotContain("'foo'", result);
+    }
+
+    [Fact]
+    public void FoldConstants_StringConcatChained_FoldedIteratively()
+    {
+        // Two separate folds on distinct pairs
+        const string src = "<?php\n$x = 'a' . 'b';\n$y = 'c' . 'd';";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("'ab'", result);
+        Assert.Contains("'cd'", result);
+    }
+
+    [Fact]
+    public void FoldConstants_DoubleQuotedString_NotFolded()
+    {
+        // Double-quoted strings with interpolation must remain opaque
+        const string src = "<?php\n$x = \"foo\" . \"bar\";";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("\"foo\"", result);
+        Assert.Contains("\"bar\"", result);
+    }
+
+    // ── Constant folding: boolean negation ────────────────────────────────────
+
+    [Fact]
+    public void FoldConstants_NotTrue_FoldsToFalse()
+    {
+        const string src = "<?php\n$x = !true;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("false", result);
+        Assert.DoesNotContain("!true", result);
+    }
+
+    [Fact]
+    public void FoldConstants_NotFalse_FoldsToTrue()
+    {
+        const string src = "<?php\n$x = !false;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("true", result);
+        Assert.DoesNotContain("!false", result);
+    }
+
+    // ── Dead code: after return ───────────────────────────────────────────────
+
+    [Fact]
+    public void DeadCode_AfterReturn_Removed()
+    {
+        const string src = "<?php\nfunction foo() {\n  return 1;\n  echo 'dead';\n}";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.DeadCode);
+        Assert.DoesNotContain("dead", result);
+        Assert.Contains("return", result);
+        Assert.Contains("}", result);
+    }
+
+    [Fact]
+    public void DeadCode_AfterReturn_RestOfFileKept()
+    {
+        const string src = "<?php\nfunction foo() {\n  return 1;\n  $x = 2;\n}\necho 'live';";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.DeadCode);
+        Assert.DoesNotContain("$x", result);
+        Assert.Contains("echo 'live'", result);
+    }
+
+    [Fact]
+    public void DeadCode_AfterThrow_Removed()
+    {
+        const string src = "<?php\nfunction foo() {\n  throw new Exception();\n  echo 'dead';\n}";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.DeadCode);
+        Assert.DoesNotContain("dead", result);
+        Assert.Contains("throw", result);
+    }
+
+    // ── Dead code: if (false) ─────────────────────────────────────────────────
+
+    [Fact]
+    public void DeadCode_IfFalse_BlockRemoved()
+    {
+        const string src = "<?php\nif (false) { echo 'dead'; }\necho 'live';";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.DeadCode);
+        Assert.DoesNotContain("dead", result);
+        Assert.Contains("echo 'live'", result);
+    }
+
+    [Fact]
+    public void DeadCode_IfFalseElse_ElseBodyKept()
+    {
+        const string src = "<?php\nif (false) { echo 'dead'; } else { echo 'kept'; }";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.DeadCode);
+        Assert.DoesNotContain("dead", result);
+        Assert.Contains("kept", result);
+    }
+
+    [Fact]
+    public void DeadCode_IfTrue_BodyKept()
+    {
+        const string src = "<?php\nif (true) { echo 'kept'; }";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.DeadCode);
+        Assert.Contains("kept", result);
+    }
+
+    [Fact]
+    public void DeadCode_IfTrueElse_ElseRemoved()
+    {
+        const string src = "<?php\nif (true) { echo 'kept'; } else { echo 'dead'; }";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.DeadCode);
+        Assert.Contains("kept", result);
+        Assert.DoesNotContain("dead", result);
+    }
+
+    [Fact]
+    public void DeadCode_IfZero_TreatedAsFalse()
+    {
+        const string src = "<?php\nif (0) { echo 'dead'; }\necho 'live';";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.DeadCode);
+        Assert.DoesNotContain("dead", result);
+        Assert.Contains("live", result);
+    }
+
+    // ── Combined: constant folding then dead code ─────────────────────────────
+
+    [Fact]
+    public void Combined_FoldThenDeadCode_Works()
+    {
+        // After folding: 0 + 0 → 0, then if (0) { ... } is dead code
+        const string src = "<?php\nif (0 + 0) { echo 'dead'; }\necho 'live';";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding | OptimizePasses.DeadCode);
+        Assert.DoesNotContain("dead", result);
+        Assert.Contains("live", result);
+    }
+
+    [Fact]
+    public void Combined_All_CommentsWhitespaceConstantsDeadCode()
+    {
+        const string src = """
+            <?php
+            // Remove this comment
+            $x = 2 + 3; /* inline */ if (false) { echo 'dead'; }
+            echo 'live'; // trailing
+            """;
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.All);
+        Assert.DoesNotContain("//", result);
+        Assert.DoesNotContain("/*", result);
+        Assert.DoesNotContain("dead", result);
+        Assert.Contains("5", result);         // 2+3 folded
+        Assert.Contains("live", result);
+        Assert.DoesNotContain("  ", result);  // no double-spaces
+    }
+
+    [Fact]
+    public void Optimize_None_SourceUnchanged()
+    {
+        const string src = "<?php\n// comment\n$x = 1 + 1;";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.None);
+        Assert.Equal(src, result);
+    }
+
+    [Fact]
+    public void FoldConstants_InsideString_NotFolded()
+    {
+        // Expressions inside strings must not be folded
+        const string src = "<?php\n$x = '2 + 3';";
+        var result = PhpOptimizer.Optimize(src, OptimizePasses.ConstantFolding);
+        Assert.Contains("'2 + 3'", result);
+    }
+}

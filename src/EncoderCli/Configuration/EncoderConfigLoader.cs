@@ -40,6 +40,7 @@ public static class EncoderConfigLoader
         var server = root.Element("licenseServer") ?? throw new InvalidOperationException("licenseServer fehlt.");
         var defaultsEl = root.Element("defaults");
 
+        var telEl = root.Element("telemetry");
         var config = new EncoderConfig
         {
             LicenseServer = new LicenseServerOptions
@@ -54,6 +55,11 @@ public static class EncoderConfigLoader
                 Algorithm = defaultsEl?.Attribute("algorithm")?.Value ?? "AES-256-GCM",
                 KeepPhpExtension = bool.TryParse(defaultsEl?.Attribute("keepPhpExtension")?.Value, out var keep) && keep,
                 WriteManifest = !bool.TryParse(defaultsEl?.Attribute("writeManifest")?.Value, out var write) || write
+            },
+            Telemetry = new TelemetryOptions
+            {
+                Enabled     = bool.TryParse(telEl?.Attribute("enabled")?.Value, out var telEnabled) && telEnabled,
+                EndpointUrl = telEl?.Attribute("endpointUrl")?.Value
             }
         };
 

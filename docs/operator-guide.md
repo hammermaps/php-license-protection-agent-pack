@@ -312,6 +312,48 @@ curl -s https://license.example.com/api/v1/admin/stats \
 
 Der Encoder API Key (`Security:EncoderApiKeys`) berechtigt nur zu `/api/v1/encoder/`-Endpunkten — nicht zum Admin-Bereich.
 
+### Übersicht Admin-Endpunkte
+
+| Endpunkt | Methode | Zweck |
+|----------|---------|-------|
+| `/api/v1/admin/licenses` | GET | Lizenzen auflisten |
+| `/api/v1/admin/licenses/{uid}/revoke` | POST | Lizenz sperren |
+| `/api/v1/admin/builds/{uid}/revoke` | POST | Build sperren |
+| `/api/v1/admin/activations` | GET | Aktivierungen auflisten |
+| `/api/v1/admin/activations/{uid}/revoke` | POST | Aktivierung sperren |
+| `/api/v1/admin/activations/{uid}` | DELETE | Aktivierung löschen (Re-Aktivierung ermöglichen) |
+| `/api/v1/admin/audit-log` | GET | Audit-Log abfragen |
+| `/api/v1/admin/stats` | GET | Aggregierte Zählerstände |
+| `/api/v1/admin/api-clients` | GET | API-Clients auflisten |
+| `/api/v1/admin/api-clients` | POST | API-Client anlegen |
+| `/api/v1/admin/api-clients/{uid}` | DELETE | API-Client sperren |
+| `/api/v1/admin/error-reports` | GET | PHP-Fehlerberichte vom Loader |
+| `/api/v1/admin/telemetry` | GET | Telemetrie-Ereignisse von Encoder + Loader |
+
+### Error Reports abfragen
+
+```bash
+# Alle Fehler für eine Lizenz
+curl -s https://license.example.com/api/v1/admin/error-reports?licenseId=lic_... \
+    -H "Authorization: Bearer YOUR_ADMIN_KEY" | python3 -m json.tool
+
+# Gefiltert nach Build
+curl -s "https://license.example.com/api/v1/admin/error-reports?buildId=build_...&limit=50" \
+    -H "Authorization: Bearer YOUR_ADMIN_KEY"
+```
+
+### Telemetrie abfragen
+
+```bash
+# Alle Encoder-Events der letzten 200 Einträge
+curl -s "https://license.example.com/api/v1/admin/telemetry?source=encoder" \
+    -H "Authorization: Bearer YOUR_ADMIN_KEY" | python3 -m json.tool
+
+# Loader-Events für eine Lizenz
+curl -s "https://license.example.com/api/v1/admin/telemetry?source=loader&licenseId=lic_..." \
+    -H "Authorization: Bearer YOUR_ADMIN_KEY"
+```
+
 ---
 
 ## Backup

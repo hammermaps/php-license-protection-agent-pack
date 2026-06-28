@@ -426,11 +426,15 @@ encoder.MapPost("/builds/{buildId}/manifest/sign", async (string buildId, Manife
         UPDATE builds
         SET manifest_hash = @ManifestHash,
             manifest_signature = @Signature,
+            manifest_json = @ManifestJson,
+            download_url = @DownloadUrl,
             file_count = @FileCount,
             status = 'signed',
             signed_at = CURRENT_TIMESTAMP
         WHERE build_uid = @BuildId;
-        """, new { BuildId = buildId, request.ManifestHash, Signature = signature, request.FileCount });
+        """, new { BuildId = buildId, request.ManifestHash, Signature = signature,
+                   ManifestJson = request.ManifestJson, DownloadUrl = request.DownloadUrl,
+                   request.FileCount });
 
     await audit.LogAsync("encoder", "build_signed", "build", buildId,
         httpContext.Connection.RemoteIpAddress?.ToString(),
@@ -662,6 +666,9 @@ app.MapPost("/api/v1/runtime/lease", async (
     await audit.LogAsync("loader", "lease_granted", "license", row.LicenseUid, clientIp,
         new { leaseId = leaseUid, buildId = request.BuildId });
 
+    DateTimeOffset? validFrom  = row.ValidFrom.HasValue  ? new DateTimeOffset(row.ValidFrom.Value,  TimeSpan.Zero) : null;
+    DateTimeOffset? validUntil = row.ValidUntil.HasValue ? new DateTimeOffset(row.ValidUntil.Value, TimeSpan.Zero) : null;
+
     return Results.Ok(new RuntimeLeaseResponse(
         "MMENC-LEASE-1",
         leaseUid,
@@ -675,7 +682,9 @@ app.MapPost("/api/v1/runtime/lease", async (
         expiresAt,
         graceUntil,
         signature,
-        features));
+        features,
+        validFrom,
+        validUntil));
 }).RequireRateLimiting(RateLimitPolicyLease);
 
 static string[]? ParseFeaturesJson(string? json)
@@ -684,6 +693,181 @@ static string[]? ParseFeaturesJson(string? json)
     try { return JsonSerializer.Deserialize<string[]>(json); }
     catch { return null; }
 }
+
+/* ── Customer Update API ─────────────────────────────────────────────────── */
+
+/* GET /api/v1/customer/builds/latest?licenseId=xxx&licenseKey=yyy
+ * Returns the latest signed manifest for a given license.
+ * Auth: licenseId + licenseKey (both available in the customer's license.json).
+ * The download_url field (if set by the encoder) tells the customer where to
+ * fetch the new encrypted PHP files. */
+app.MapGet("/api/v1/customer/builds/latest", async (
+    IDbConnectionFactory db,
+    string? licenseId,
+    string? licenseKey) =>
+{
+    if (string.IsNullOrEmpty(licenseId) || string.IsNullOrEmpty(licenseKey))
+        return Results.BadRequest(ErrorDto.Create("AUTH_REQUIRED", "licenseId and licenseKey are required."));
+
+    await using var conn = await db.OpenAsync();
+
+    var row = await conn.QuerySingleOrDefaultAsync("""
+        SELECT b.build_uid        AS BuildId,
+               b.manifest_json    AS ManifestJson,
+               b.manifest_signature AS ManifestSignature,
+               b.download_url     AS DownloadUrl,
+               b.signed_at        AS SignedAt
+        FROM builds b
+        JOIN licenses l ON b.license_id = l.id
+        WHERE l.license_uid = @LicenseId
+          AND l.license_key = @LicenseKey
+          AND l.status = 'active'
+          AND b.status = 'signed'
+          AND b.manifest_json IS NOT NULL
+        ORDER BY b.signed_at DESC
+        LIMIT 1;
+        """, new { LicenseId = licenseId, LicenseKey = licenseKey });
+
+    if (row is null)
+        return Results.NotFound(ErrorDto.Create("NOT_FOUND", "No signed build found for this license."));
+
+    string? manifestJson = row.ManifestJson;
+    if (string.IsNullOrEmpty(manifestJson))
+        return Results.NotFound(ErrorDto.Create("NOT_FOUND", "No manifest available for latest build."));
+
+    DateTimeOffset signedAt = row.SignedAt is string s
+        ? DateTimeOffset.TryParse(s, out var dt) ? dt : DateTimeOffset.UtcNow
+        : DateTimeOffset.UtcNow;
+
+    return Results.Ok(new CustomerManifestResponse(
+        (string)row.BuildId,
+        manifestJson,
+        (string)row.ManifestSignature,
+        signedAt,
+        (string?)row.DownloadUrl));
+}).RequireRateLimiting(RateLimitPolicyLease);
+
+/* ── Runtime Error Reporting ─────────────────────────────────────────────── */
+
+/* POST /api/v1/runtime/errors
+ * Receives a batch of PHP errors from mmloader and stores them per build/license.
+ * Enabled on the customer side via mmloader.error_reporting = 1 in php.ini.
+ * Auth: licenseId + buildId (no secret needed — reports are low-sensitivity telemetry). */
+app.MapPost("/api/v1/runtime/errors", async (
+    ErrorReportRequest request,
+    IDbConnectionFactory db) =>
+{
+    if (string.IsNullOrEmpty(request.LicenseId) || string.IsNullOrEmpty(request.BuildId))
+        return Results.BadRequest(ErrorDto.Create("AUTH_REQUIRED", "licenseId and buildId are required."));
+    if (request.Errors is null || request.Errors.Length == 0)
+        return Results.Ok(new { accepted = 0 });
+
+    await using var conn = await db.OpenAsync();
+
+    var buildDbId = await conn.ExecuteScalarAsync<long?>("""
+        SELECT b.id FROM builds b
+        JOIN licenses l ON b.license_id = l.id
+        WHERE l.license_uid = @LicenseId AND b.build_uid = @BuildId AND b.status = 'signed'
+        LIMIT 1;
+        """, new { request.LicenseId, request.BuildId });
+
+    int accepted = 0;
+    foreach (var err in request.Errors.Take(50))
+    {
+        await conn.ExecuteAsync("""
+            INSERT INTO error_reports
+                (build_id, license_uid, machine_fingerprint, reported_at,
+                 error_level, error_message, error_file, error_line, php_version, sapi)
+            VALUES
+                (@BuildId, @LicenseId, @MachineFingerprint, @ReportedAt,
+                 @ErrorLevel, @ErrorMessage, @ErrorFile, @ErrorLine, @PhpVersion, @Sapi);
+            """, new
+        {
+            BuildId = buildDbId,
+            request.LicenseId,
+            request.MachineFingerprint,
+            ReportedAt = err.Timestamp,
+            ErrorLevel = err.Level,
+            ErrorMessage = err.Message,
+            ErrorFile = err.File,
+            ErrorLine = err.Line,
+            request.PhpVersion,
+            request.Sapi
+        });
+        accepted++;
+    }
+
+    return Results.Ok(new { accepted });
+}).RequireRateLimiting(RateLimitPolicyLease);
+
+/* ── Telemetry ───────────────────────────────────────────────────────────── */
+
+/* POST /api/v1/encoder/telemetry  (Bearer API key required — same as encoder group)
+ * Receives build-lifecycle events from the EncoderCLI.
+ * Disabled by default on the encoder side via config Telemetry:Enabled = false. */
+encoder.MapPost("/telemetry", async (
+    TelemetryEventRequest request,
+    IDbConnectionFactory db,
+    HttpContext httpContext) =>
+{
+    if (string.IsNullOrEmpty(request.EventType))
+        return Results.BadRequest(ErrorDto.Create("VALIDATION_FAILED", "eventType is required."));
+
+    await using var conn = await db.OpenAsync();
+    var payloadJson = request.Data is { Count: > 0 }
+        ? JsonSerializer.Serialize(request.Data)
+        : null;
+
+    await conn.ExecuteAsync("""
+        INSERT INTO telemetry_events (source, event_type, license_uid, build_uid, project_uid, payload_json, occurred_at, client_ip)
+        VALUES ('encoder', @EventType, @LicenseId, @BuildId, @ProjectId, @PayloadJson, @OccurredAt, @ClientIp)
+        """, new
+    {
+        request.EventType,
+        LicenseId  = request.LicenseId,
+        BuildId    = request.BuildId,
+        ProjectId  = request.ProjectId,
+        PayloadJson = payloadJson,
+        OccurredAt  = request.OccurredAt.UtcDateTime,
+        ClientIp    = httpContext.Connection.RemoteIpAddress?.ToString()
+    });
+
+    return Results.Ok(new { accepted = 1 });
+});
+
+/* POST /api/v1/telemetry/loader
+ * Receives lease-lifecycle events from mmloader (PHP extension).
+ * No secret auth: telemetry is non-sensitive usage data. Rate-limited.
+ * Disabled by default on the loader side via mmloader.telemetry = 0. */
+app.MapPost("/api/v1/telemetry/loader", async (
+    TelemetryEventRequest request,
+    IDbConnectionFactory db,
+    HttpContext httpContext) =>
+{
+    if (string.IsNullOrEmpty(request.EventType) || string.IsNullOrEmpty(request.LicenseId))
+        return Results.BadRequest(ErrorDto.Create("VALIDATION_FAILED", "eventType and licenseId are required."));
+
+    await using var conn = await db.OpenAsync();
+    var payloadJson = request.Data is { Count: > 0 }
+        ? JsonSerializer.Serialize(request.Data)
+        : null;
+
+    await conn.ExecuteAsync("""
+        INSERT INTO telemetry_events (source, event_type, license_uid, build_uid, project_uid, payload_json, occurred_at, client_ip)
+        VALUES ('loader', @EventType, @LicenseId, @BuildId, @ProjectId, @PayloadJson, @OccurredAt, @ClientIp)
+        """, new
+    {
+        request.EventType,
+        LicenseId   = request.LicenseId,
+        BuildId     = request.BuildId,
+        ProjectId   = request.ProjectId,
+        PayloadJson = payloadJson,
+        OccurredAt  = request.OccurredAt.UtcDateTime,
+        ClientIp    = httpContext.Connection.RemoteIpAddress?.ToString()
+    });
+
+    return Results.Ok(new { accepted = 1 });
+}).RequireRateLimiting(RateLimitPolicyLease);
 
 /* ── Admin API ───────────────────────────────────────────────────────────── */
 
@@ -967,6 +1151,84 @@ adminApi.MapDelete("/api-clients/{clientUid}", async (
         httpContext.Connection.RemoteIpAddress?.ToString());
 
     return Results.Ok(new AdminRevokeResponse(true, $"API client {clientUid} revoked."));
+});
+
+/* Error reports — developer view of customer-reported PHP errors */
+adminApi.MapGet("/error-reports", async (IDbConnectionFactory db, string? licenseId, string? buildId, int limit = 100) =>
+{
+    if (limit is < 1 or > 1000) limit = 100;
+    await using var conn = await db.OpenAsync();
+
+    var rows = await conn.QueryAsync("""
+        SELECT e.id              AS Id,
+               e.license_uid     AS LicenseId,
+               b.build_uid       AS BuildId,
+               e.reported_at     AS ReportedAt,
+               e.error_level     AS ErrorLevel,
+               e.error_message   AS ErrorMessage,
+               e.error_file      AS ErrorFile,
+               e.error_line      AS ErrorLine,
+               e.php_version     AS PhpVersion,
+               e.sapi            AS Sapi,
+               e.machine_fingerprint AS MachineFingerprint
+        FROM error_reports e
+        LEFT JOIN builds b ON e.build_id = b.id
+        WHERE (@LicenseId IS NULL OR e.license_uid = @LicenseId)
+          AND (@BuildId IS NULL OR b.build_uid = @BuildId)
+        ORDER BY e.reported_at DESC
+        LIMIT @Limit
+        """, new { LicenseId = licenseId, BuildId = buildId, Limit = limit });
+
+    var result = rows.Select(r => new AdminErrorReportDto(
+        (long)r.Id,
+        (string)r.LicenseId,
+        (string?)r.BuildId,
+        r.ReportedAt?.ToString() ?? "",
+        (int)r.ErrorLevel,
+        (string)r.ErrorMessage,
+        (string?)r.ErrorFile,
+        (int?)r.ErrorLine,
+        (string?)r.PhpVersion,
+        (string?)r.Sapi,
+        (string?)r.MachineFingerprint)).ToList();
+
+    return Results.Ok(new { reports = result });
+});
+
+/* Telemetry — developer view of encoder and loader events */
+adminApi.MapGet("/telemetry", async (IDbConnectionFactory db, string? source, string? licenseId, string? projectId, int limit = 200) =>
+{
+    if (limit is < 1 or > 2000) limit = 200;
+    await using var conn = await db.OpenAsync();
+
+    var rows = await conn.QueryAsync("""
+        SELECT id           AS Id,
+               source       AS Source,
+               event_type   AS EventType,
+               license_uid  AS LicenseId,
+               build_uid    AS BuildId,
+               project_uid  AS ProjectId,
+               occurred_at  AS OccurredAt,
+               payload_json AS PayloadJson
+        FROM telemetry_events
+        WHERE (@Source    IS NULL OR source      = @Source)
+          AND (@LicenseId IS NULL OR license_uid = @LicenseId)
+          AND (@ProjectId IS NULL OR project_uid = @ProjectId)
+        ORDER BY occurred_at DESC
+        LIMIT @Limit
+        """, new { Source = source, LicenseId = licenseId, ProjectId = projectId, Limit = limit });
+
+    var result = rows.Select(r => new AdminTelemetryDto(
+        (long)r.Id,
+        (string)r.Source,
+        (string)r.EventType,
+        (string?)r.LicenseId,
+        (string?)r.BuildId,
+        (string?)r.ProjectId,
+        r.OccurredAt?.ToString() ?? "",
+        (string?)r.PayloadJson)).ToList();
+
+    return Results.Ok(new { events = result });
 });
 
 /* Audit log query */

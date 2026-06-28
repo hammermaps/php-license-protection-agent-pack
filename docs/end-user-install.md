@@ -112,6 +112,89 @@ mmloader.offline_grace_seconds = 604800    ; 7 days
 
 ---
 
+## Optional: Error Reporting
+
+mmloader can send PHP errors from your server back to the software vendor so they can diagnose issues in their protected code. This is **disabled by default** and requires explicit opt-in.
+
+> No source code or build keys are transmitted. Only PHP error messages, file path (relative), line number, PHP version, and SAPI type are sent.
+
+```ini
+; Enable sending PHP error batches to the license server after each request
+mmloader.error_reporting = 1
+
+; Override the reporting endpoint (default: <license_server>/api/v1/runtime/errors)
+; mmloader.error_report_url =
+
+; Maximum number of errors to collect per request (default: 20)
+mmloader.error_report_max_per_request = 20
+
+; PHP error level bitmask (default: 32767 = E_ALL)
+; E_ERROR=1, E_WARNING=2, E_PARSE=4, E_NOTICE=8, E_USER_ERROR=256 etc.
+; Example — only fatal errors and warnings: 3
+mmloader.error_report_level = 32767
+```
+
+---
+
+## Optional: Telemetry
+
+mmloader can send lease-lifecycle events (when a lease was acquired or used from offline cache) to the license server. This helps the vendor monitor deployment health per license. **Disabled by default.**
+
+> Transmitted data: event type, licenseId, buildId, PHP version, SAPI. No secrets, no source code, no build key.
+
+```ini
+; Enable sending telemetry events
+mmloader.telemetry = 1
+
+; Override the telemetry endpoint (default: <license_server>/api/v1/telemetry/loader)
+; mmloader.telemetry_url =
+```
+
+---
+
+## PHP Functions
+
+mmloader registers the following PHP functions that you can call from protected PHP code:
+
+### `mmprotect_has_feature(string $feature): bool`
+
+Returns `true` if the current license includes the given feature string.
+
+```php
+if (mmprotect_has_feature('premium')) {
+    // unlock premium features
+}
+```
+
+### `mmprotect_license_info(): array|false`
+
+Returns license metadata from the current lease, or `false` if no active lease exists (e.g. in dev mode without a server).
+
+```php
+$info = mmprotect_license_info();
+if ($info !== false) {
+    echo "License: " . $info['licenseId'];
+    echo "Valid until: " . $info['validUntil'];
+    echo "Server: " . $info['licenseServer'];
+}
+```
+
+Returned array keys:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `licenseId` | string | The license UID |
+| `buildId` | string | The current build UID |
+| `customerId` | string | The customer UID |
+| `projectId` | string | The project UID |
+| `validFrom` | string\|null | License start date (ISO-8601, UTC) |
+| `validUntil` | string\|null | License expiry date (ISO-8601, UTC), or null = no expiry |
+| `licenseServer` | string\|null | Effective license server URL used for this lease |
+| `leaseExpiresAt` | string | When the current lease expires (ISO-8601, UTC) |
+| `features` | array | Feature strings from the license (may be empty) |
+
+---
+
 ## Step 3: Deploy Your Application
 
 Deploy the protected PHP application to your web root as usual. The directory structure typically looks like:
@@ -236,7 +319,21 @@ The file's ECDSA signature could not be verified. Check:
 
 ### "MMENC: failed to decrypt protected file"
 
-Decryption failed — the ciphertext may have been tampered with or the wrong build key was used. Re-download the application from your vendor.
+Decryption failed — the ciphertext may have been tampered with, the file is corrupted, or the wrong build key was used.
+
+This message appears as a PHP `Warning` in the error log, followed by an include/require failure. Steps to resolve:
+
+1. Verify file integrity (re-download from your vendor).
+2. Check that the `.mmprotect/manifest.json` and `.mmprotect/license.json` are present and match the encrypted files.
+3. If you see this for ALL protected files, the license server may be returning the wrong build key — contact your vendor with the `buildId` from `.mmprotect/manifest.json`.
+
+### "MMENC: file uses obsolete format version"
+
+The protected files were encoded with an old encoder that produced a format version below the minimum supported by your mmloader. Solution: ask your vendor to re-encode the application with the current encoder.
+
+### "MMENC: file requires format version … but this loader supports up to version …"
+
+Your mmloader is older than the format version used by the encoder. Solution: update the mmloader extension to the version provided by your vendor.
 
 ### PHP version mismatch
 
@@ -276,6 +373,26 @@ When a new protected application version is deployed (new build from the vendor)
 1. Deploy the new application files (new encrypted `.php` files and updated `.mmprotect/` directory).
 2. The loader will automatically request a new lease for the new build.
 3. Old lease caches are not reused — the new build has a different `buildId`.
+
+---
+
+## Auto-Update
+
+If your vendor has provided the `update.php` script, you can check for and apply updates automatically:
+
+```bash
+# Check for updates (dry run — reports available version, does nothing)
+php update.php
+
+# Force re-apply even if version matches
+php update.php --force
+```
+
+The script reads `.mmprotect/license.json` to authenticate with the license server, compares the available `buildId` with your current build, and either updates only the manifest or downloads and atomically deploys a new application archive (if the vendor provides a download URL).
+
+**Atomic deployment (Linux):** When the app root is a symlink, the script extracts the new version to a parallel directory and atomically replaces the symlink — no downtime window.
+
+> `update.php` requires PHP curl and ZipArchive extensions.
 
 ---
 

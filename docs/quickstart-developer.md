@@ -208,8 +208,8 @@ php8.4 \
 
 ```bash
 # .NET-Tests
-dotnet test src/LicenseServer.Tests/    # 41 Tests (33 SmokeTests + 8 CryptoTests)
-dotnet test src/EncoderCli.Tests/       # 57 Tests (Glob + MmIgnore + Compression + Obfuscator)
+dotnet test src/LicenseServer.Tests/    # 44 Tests (33 SmokeTests + 11 CryptoTests)
+dotnet test src/EncoderCli.Tests/       # 90 Tests (Glob + MmIgnore + Compression + Obfuscator + Optimizer)
 
 # Decoder-Tests (Week 1–4)
 bash tests/decoder-loader/run-tests.sh
@@ -275,14 +275,33 @@ rm -rf /tmp/mm_encoded_demo /tmp/mmloader_cache
 
 ## Tipps für den Entwicklungsalltag
 
+**PHP-Quellcode optimieren** (vor der Verschlüsselung):
+```bash
+# Via CLI-Flag (Dev-Mode) — alle Passes:
+artifacts/encoder/linux-x64/mmencoder encode-dir \
+    --source tests/php-demo --output /tmp/encoded --dev --optimize
+
+# Nur Kommentare und Whitespace entfernen:
+artifacts/encoder/linux-x64/mmencoder encode-dir \
+    --source tests/php-demo --output /tmp/encoded --dev --optimize comments,whitespace
+
+# Via Config (Produktion):
+# "defaults": { "optimize": "all", ... }
+```
+Verfügbare Passes: `comments`, `whitespace` (oder `ws`), `constants` (oder `folding`), `deadcode` (oder `dead`), `all`, `none`. Vollständige Dokumentation: [`docs/optimizer-guide.md`](optimizer-guide.md).
+
 **LZ4-Komprimierung aktivieren** (spart 40–60 % bei großem PHP-Code):
 ```bash
 # Via CLI-Flag (Dev-Mode):
 artifacts/encoder/linux-x64/mmencoder encode-dir \
     --source tests/php-demo --output /tmp/encoded --dev --compress lz4
 
+# Optimizer + Komprimierung kombinieren (empfohlen):
+artifacts/encoder/linux-x64/mmencoder encode-dir \
+    --source tests/php-demo --output /tmp/encoded --dev --optimize all --compress lz4
+
 # Via Config (Produktion):
-# "defaults": { "compression": "lz4", ... }
+# "defaults": { "compression": "lz4", "optimize": "all", ... }
 ```
 Der Loader erkennt das Feld `"compression": "lz4"` im MMENC1-Header automatisch und dekomprimiert transparent. Klartext-Dateien ohne Komprimierung funktionieren unverändert (rückwärtskompatibel).
 
@@ -311,7 +330,7 @@ scripts/linux/build-decoder-php85.sh
 
 | Dokument | Inhalt |
 |---|---|
+| [`docs/optimizer-guide.md`](optimizer-guide.md) | Vollständige Referenz für `--optimize`: alle Passes mit Beispielen |
 | [`docs/encryption-format.md`](encryption-format.md) | MMENC1-Containerformat, HKDF, AES-GCM, ECDSA im Detail |
-| [`docs/build-guide.md`](build-guide.md) | Vollständige Build-Anleitung, Jenkins CI/CD |
+| [`docs/build-guide.md`](build-guide.md) | Vollständige Build-Anleitung, Fuzz-Tests, Dev-Builds, Jenkins CI/CD |
 | [`docs/06-api-contract.md`](06-api-contract.md) | REST API — alle Endpunkte mit Request/Response-Beispielen |
-| [`docs/04-security-crypto-format.md`](04-security-crypto-format.md) | Kryptografie-Spezifikation |

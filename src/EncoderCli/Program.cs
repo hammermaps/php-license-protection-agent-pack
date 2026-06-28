@@ -78,7 +78,8 @@ try
                     cli.Verbose, cli.DryRun,
                     compression: cli.Compress,
                     licenseServerUrl: cli.LicenseServerUrl,
-                    obfuscate: cli.Obfuscate);
+                    obfuscate: cli.Obfuscate,
+                    optimize: cli.Optimize);
             }
             else
 #endif
@@ -102,6 +103,10 @@ try
                 // --obfuscate CLI flag overrides config value
                 if (cli.Obfuscate)
                     config.Defaults.Obfuscate = true;
+
+                // --optimize CLI flag overrides config value
+                if (cli.Optimize != null)
+                    config.Defaults.Optimize = cli.Optimize;
 
                 // --license-server CLI flag overrides the config URL embedded in headers
                 if (cli.LicenseServerUrl != null)

@@ -60,13 +60,44 @@ Output: `artifacts/server/linux-x64/MmProtect.LicenseServer.dll`
 
 ### Encoder CLI
 
+The Encoder CLI is published as a **self-contained single-file binary** — the .NET runtime is bundled inside the binary. No .NET installation is required on the target machine.
+
 ```bash
+# Linux x64 (Servers, WSL, GitHub Actions ubuntu runners)
 dotnet publish src/EncoderCli/EncoderCli.csproj \
-    -c Release -r linux-x64 --self-contained false \
+    -c Release -r linux-x64 --self-contained true \
     -o artifacts/encoder/linux-x64
+
+# Linux ARM64 (Raspberry Pi, AWS Graviton, Apple M1 Linux)
+dotnet publish src/EncoderCli/EncoderCli.csproj \
+    -c Release -r linux-arm64 --self-contained true \
+    -o artifacts/encoder/linux-arm64
+
+# Windows x64
+dotnet publish src/EncoderCli/EncoderCli.csproj \
+    -c Release -r win-x64 --self-contained true \
+    -o artifacts/encoder/win-x64
+
+# Windows ARM64 (Surface Pro X, Snapdragon X Elite)
+dotnet publish src/EncoderCli/EncoderCli.csproj \
+    -c Release -r win-arm64 --self-contained true \
+    -o artifacts/encoder/win-arm64
 ```
 
-Output: `artifacts/encoder/linux-x64/mmencoder`
+Or use the scripts:
+
+```bash
+scripts/linux/build-encoder.sh    # builds linux-x64 + linux-arm64
+scripts/windows/build-encoder.cmd # builds win-x64 + win-arm64
+```
+
+Output:
+- `artifacts/encoder/linux-x64/mmencoder` (~60–90 MB, standalone)
+- `artifacts/encoder/linux-arm64/mmencoder`
+- `artifacts/encoder/win-x64/mmencoder.exe`
+- `artifacts/encoder/win-arm64/mmencoder.exe`
+
+> **Hinweis:** `PublishTrimmed` ist deaktiviert weil `System.Text.Json` (Reflection-basiert) und `XDocument` nicht trim-sicher sind. Die Binary-Größe ist größer als bei getrimmten Builds (~60–90 MB), dafür ist sie stets korrekt.
 
 ### PHP Decoder/Loader (PHP 8.4)
 
@@ -97,6 +128,24 @@ Output: `artifacts/decoder/linux-x64/mmloader-php85.so`
 
 Requirements: `php8.5-dev` installed (see Prerequisites).
 
+### Dev Builds (Encoder + Decoder)
+
+Dev builds include `MMPROTECT_DEV_BUILD` and unlock the `--dev` encoder flag and `mmloader.dev_mode` INI setting. Required for the demo test and local development without a license server.
+
+```bash
+# Dev encoder (output: artifacts/encoder/linux-x64-dev/)
+scripts/linux/build-encoder-dev.sh
+
+# Dev decoder for PHP 8.4 (output: artifacts/decoder/linux-x64/mmloader-dev.so)
+scripts/linux/build-decoder-dev.sh
+
+# Or build the encoder in Debug config directly to linux-x64/:
+dotnet publish src/EncoderCli/EncoderCli.csproj -c Debug -r linux-x64 \
+    --self-contained true -o artifacts/encoder/linux-x64
+```
+
+Dev builds must **never** be distributed to customers. In release builds, `mmloader.dev_mode`, `mmloader.dev_buildkey`, and the `--dev` encoder flag are compiled out entirely.
+
 ---
 
 ## Running Tests
@@ -104,8 +153,8 @@ Requirements: `php8.5-dev` installed (see Prerequisites).
 ### Unit/Integration tests (.NET)
 
 ```bash
-dotnet test src/LicenseServer.Tests/ -v m   # 41 Tests (33 SmokeTests + 8 CryptoTests)
-dotnet test src/EncoderCli.Tests/ -v m      # 57 Tests (Glob + MmIgnore + Compression + Obfuscator)
+dotnet test src/LicenseServer.Tests/ -v m   # 44 Tests (33 SmokeTests + 11 CryptoTests)
+dotnet test src/EncoderCli.Tests/ -v m      # 90 Tests (Glob + MmIgnore + Compression + Obfuscator + Optimizer)
 ```
 
 All tests run against an in-process SQLite database via `WebApplicationFactory` — no external MySQL instance needed.
@@ -119,6 +168,29 @@ bash tests/decoder-loader/run-tests.sh           # Week 1: MMENC1 format, basic 
 bash tests/decoder-loader/run-tests-week2.sh     # Week 2: HTTP lease against mock server
 bash tests/decoder-loader/run-tests-week3.sh     # Week 3: Security gates (expiry, revocation)
 bash tests/decoder-loader/run-tests-week4.sh     # Week 4: ECDSA-P256, execute_ex OPcache guard
+```
+
+### Decoder fuzz tests
+
+Corpus-based fuzz tests that load 27 purposefully malformed MMENC1 files through PHP + mmloader and verify that the loader neither crashes (SIGSEGV) nor leaks decrypted content:
+
+```bash
+bash tests/decoder-loader/run-fuzz-test.sh --ext84 artifacts/decoder/linux-x64/mmloader-dev.so
+# Expected: 27 passed, 0 failed
+```
+
+Tested cases: wrong magic, empty file, truncated at various offsets, zero/huge header length, non-digit length field, invalid JSON, empty JSON, future/obsolete format version, missing required fields (nonce/tag/buildId), bad algorithm, short nonce/tag, zero/random/empty ciphertext, large buildId, null bytes in JSON, zeros after magic.
+
+For continuous/coverage fuzzing (requires clang + AddressSanitizer):
+
+```bash
+cd tests/decoder-loader
+clang -g -O1 -fsanitize=fuzzer,address \
+      -I../../src/PhpDecoderLoader/vendor/cjson \
+      ../../src/PhpDecoderLoader/vendor/cjson/cJSON.c \
+      fuzz-mmenc-header.c \
+      -o fuzz-mmenc-header
+./fuzz-mmenc-header corpus/ -max_len=65536 -timeout=10
 ```
 
 ### Full end-to-end integration test
@@ -142,9 +214,20 @@ Expected output: `7 passed, 0 failed` (PHP 8.5 skipped if not built).
 
 ### Demo-Projekt tests
 
+The demo tests require the debug-mode encoder (includes `--dev` flag) and the dev loader:
+
 ```bash
 bash tests/php-demo/run-demo-test.sh
 # Expected: 31/31 passed (PHP 8.5 skip)
+```
+
+The script uses `artifacts/encoder/linux-x64/mmencoder.dll` (must be a debug build with `MMPROTECT_DEV_BUILD`) and `artifacts/decoder/linux-x64/mmloader.so` (dev build supports `mmloader.dev_mode`). To (re-)build both:
+
+```bash
+dotnet publish src/EncoderCli/EncoderCli.csproj -c Debug -r linux-x64 \
+    --self-contained false -o artifacts/encoder/linux-x64
+scripts/linux/build-decoder-dev.sh
+cp artifacts/decoder/linux-x64/mmloader-dev.so artifacts/decoder/linux-x64/mmloader.so
 ```
 
 ### Comprehensive test (36 phases)
@@ -184,17 +267,27 @@ After a full build:
 ```
 artifacts/
 ├─ server/
-│  ├─ linux-x64/   MmProtect.LicenseServer.dll + appsettings.json
+│  ├─ linux-x64/       MmProtect.LicenseServer.dll + appsettings.json
 │  └─ win-x64/
 ├─ encoder/
-│  ├─ linux-x64/   mmencoder
-│  └─ win-x64/     mmencoder.exe
+│  ├─ linux-x64/       mmencoder         (self-contained, ~60-90 MB, kein .NET nötig)
+│  ├─ linux-arm64/     mmencoder         (self-contained, Graviton/Raspberry Pi)
+│  ├─ linux-x64-dev/   mmencoder         (dev build — includes --dev, MMPROTECT_DEV_BUILD)
+│  ├─ win-x64/         mmencoder.exe     (self-contained, kein .NET nötig)
+│  └─ win-arm64/       mmencoder.exe     (self-contained, Surface Pro X etc.)
 ├─ decoder/
-│  ├─ linux-x64/   mmloader.so, mmloader-php85.so
-│  └─ win-x64/     php_mmloader.dll
+│  ├─ linux-x64/
+│  │  ├─ mmloader.so           (release — requires signing_public_key_file)
+│  │  ├─ mmloader-dev.so       (dev build — dev_mode + no signing key required)
+│  │  └─ mmloader-php85.so     (PHP 8.5 release build)
+│  └─ win-x64/         php_mmloader.dll
 └─ release/
-   └─ mmprotect-<version>.zip   (all artefacts zipped)
+   └─ mmprotect-<version>.zip   (release artefacts only)
 ```
+
+> **Self-contained Encoder:** Die Encoder-Binaries ab Version 0.1.0 bündeln die .NET 8-Runtime. Zielmaschinen benötigen kein .NET SDK oder Runtime-Paket. Die Binaries sind größer (~60–90 MB), aber vollständig portabel.
+
+> **Release vs. Dev:** Release builds (`mmloader.so`, `mmencoder`) sind für Kundenverteilung gedacht. Dev builds (`mmloader-dev.so`, Encoder im Debug-Config) sind ausschließlich für interne Entwicklung — sie enthalten `MMPROTECT_DEV_BUILD`, das dev_mode aktiviert, Signing-Key-Anforderungen umgeht und weitere INI-Einträge freigibt.
 
 ---
 

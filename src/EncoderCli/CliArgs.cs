@@ -23,6 +23,8 @@ public sealed class CliArgs
     public string? LicenseServerUrl { get; private set; }
     /// <summary>When true, PHP source is obfuscated (comments stripped, vars renamed) before encryption.</summary>
     public bool Obfuscate { get; private set; }
+    /// <summary>Optimizer pass specifier: null = disabled, "all" or comma-separated passes.</summary>
+    public string? Optimize { get; private set; }
 
     public static CliArgs Parse(string[] args)
     {
@@ -70,6 +72,14 @@ public sealed class CliArgs
                 case "--obfuscate":
                     result.Obfuscate = true;
                     break;
+                case "--optimize":
+                    // Optional value: --optimize [passes]
+                    // If next arg doesn't start with '-', treat it as the passes string
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+                        result.Optimize = args[++i].Trim();
+                    else
+                        result.Optimize = "all";
+                    break;
                 case "--verbose":
                 case "-v":
                     result.Verbose = true;
@@ -95,6 +105,7 @@ public sealed class CliArgs
                                [--mmignore <file>]
                                [--compress lz4|none]
                                [--obfuscate]
+                               [--optimize [all|none|comments,whitespace,constants,deadcode]]
                                [--dry-run]
                                [--verbose]
 
@@ -105,6 +116,10 @@ public sealed class CliArgs
           --compress none      Keine Komprimierung (Standard).
           --obfuscate          PHP-Quellcode vor der Verschlüsselung obfuszieren:
                                Kommentare entfernen, Variablennamen kürzen.
+          --optimize [passes]  PHP-Quellcode optimieren (vor Obfuszierung):
+                               Kommentare, Whitespace, Konstanten falten, Dead Code entfernen.
+                               Passes: all (Standard), none, oder kommagetrennte Auswahl:
+                               comments, whitespace, constants, deadcode.
           --license-server <url>  License-Server-URL direkt in jede kodierte Datei einbetten.
                                Überschreibt mmloader.license_server (INI) pro Datei.
                                Ermöglicht mehrere Lizenzserver auf einer PHP-Instanz.

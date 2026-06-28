@@ -6,6 +6,15 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>mmencoder</AssemblyName>
     <RootNamespace>MmProtect.EncoderCli</RootNamespace>
+    <!-- Self-contained single-file publish: runtime bundled, no .NET installation required.
+         PublishTrimmed is intentionally disabled — System.Text.Json + XDocument use
+         reflection which is not trim-safe without source generators. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+    <!-- Strip debug symbols from release publish to keep binary size minimal -->
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
   </PropertyGroup>
 
   <!-- Dev-only features (LocalDevEncoder, dev flag) are compiled in only for Debug builds. -->

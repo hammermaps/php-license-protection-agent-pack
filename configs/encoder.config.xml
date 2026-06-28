@@ -8,6 +8,10 @@
 
   <defaults phpMinVersion="8.4" algorithm="AES-256-GCM" keepPhpExtension="true" writeManifest="true" />
 
+  <!-- Optional telemetry: sends build_started/build_completed events to the license server.
+       No secrets, no source code. Set enabled="true" to opt in. -->
+  <telemetry enabled="false" endpointUrl="" />
+
   <projects>
     <project projectKey="mangelmelder" name="Mangelmelder" version="1.0.0" sourceRevision="dev-local">
       <sourceRoot>./tests/php-demo</sourceRoot>

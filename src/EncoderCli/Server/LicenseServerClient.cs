@@ -32,6 +32,31 @@ public sealed class LicenseServerClient
     public async Task<ManifestSignResponse> SignManifestAsync(string buildId, object request)
         => await PostAsync<ManifestSignResponse>($"api/v1/encoder/builds/{Uri.EscapeDataString(buildId)}/manifest/sign", request);
 
+    /// <summary>
+    /// Fire-and-forget telemetry event. Never throws — telemetry failure must not break the build.
+    /// </summary>
+    public async Task SendTelemetryAsync(string eventType, string? buildId, string? projectId,
+        string? licenseId, Dictionary<string, string>? data = null, string? endpointUrl = null)
+    {
+        try
+        {
+            var url = string.IsNullOrEmpty(endpointUrl) ? "api/v1/encoder/telemetry" : endpointUrl;
+            var payload = new
+            {
+                source     = "encoder",
+                eventType,
+                licenseId,
+                buildId,
+                projectId,
+                occurredAt = DateTimeOffset.UtcNow,
+                data
+            };
+            using var response = await _http.PostAsJsonAsync(url, payload);
+            // ignore status — telemetry is best-effort
+        }
+        catch { /* telemetry errors must never propagate */ }
+    }
+
     private async Task<T> PostAsync<T>(string url, object body)
     {
         using var response = await _http.PostAsJsonAsync(url, body);

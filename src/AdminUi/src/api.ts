@@ -2,8 +2,7 @@ import { useAuthStore } from './stores/auth'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const auth = useAuthStore()
-  const url = auth.serverUrl.replace(/\/$/, '') + path
-  const res = await fetch(url, {
+  const res = await fetch(path, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -118,9 +117,46 @@ export const createApiClient = (name: string, scope: string) =>
 export const deleteApiClient = (clientUid: string) =>
   request(`/api/v1/admin/api-clients/${clientUid}`, { method: 'DELETE' })
 
+// ── Telemetry ─────────────────────────────────────────────────────────
+
+export interface TelemetryDto {
+  id: number
+  source: string
+  eventType: string
+  licenseId: string | null
+  buildId: string | null
+  projectId: string | null
+  occurredAt: string
+  payloadJson: string | null
+}
+export const fetchTelemetry = (params?: Record<string, string>) =>
+  request<{ events: TelemetryDto[] }>(
+    '/api/v1/admin/telemetry' + (params ? '?' + new URLSearchParams(params) : '')
+  ).then(r => r.events)
+
+// ── Error reports ─────────────────────────────────────────────────────
+
+export interface ErrorReportDto {
+  id: number
+  licenseId: string
+  buildId: string | null
+  reportedAt: string
+  errorLevel: number
+  errorMessage: string
+  errorFile: string | null
+  errorLine: number | null
+  phpVersion: string | null
+  sapi: string | null
+  machineFingerprint: string | null
+}
+export const fetchErrorReports = (params?: Record<string, string>) =>
+  request<{ reports: ErrorReportDto[] }>(
+    '/api/v1/admin/error-reports' + (params ? '?' + new URLSearchParams(params) : '')
+  ).then(r => r.reports)
+
 // ── Health check (used on login) ──────────────────────────────────────
 
-export const checkHealth = (serverUrl: string, apiKey: string) =>
-  fetch(serverUrl.replace(/\/$/, '') + '/api/v1/admin/stats', {
+export const checkHealth = (apiKey: string) =>
+  fetch('/api/v1/admin/stats', {
     headers: { Authorization: `Bearer ${apiKey}` },
   })

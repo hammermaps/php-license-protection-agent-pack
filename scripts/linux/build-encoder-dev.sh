@@ -10,6 +10,6 @@ PROJECT="src/EncoderCli/EncoderCli.csproj"
 OUT="artifacts/encoder/linux-x64-dev"
 
 dotnet restore "$PROJECT"
-dotnet publish "$PROJECT" -c Debug -r linux-x64 --self-contained false -o "$OUT"
+dotnet publish "$PROJECT" -c Debug -r linux-x64 --self-contained true -o "$OUT"
 
 echo "[build-encoder-dev] Artefakt: $OUT (DEV BUILD — nicht für Produktion)"

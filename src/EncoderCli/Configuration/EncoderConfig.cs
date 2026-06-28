@@ -4,6 +4,7 @@ public sealed class EncoderConfig
 {
     public LicenseServerOptions LicenseServer { get; set; } = new();
     public DefaultOptions Defaults { get; set; } = new();
+    public TelemetryOptions Telemetry { get; set; } = new();
     public List<ProjectOptions> Projects { get; set; } = [];
 
     public ProjectOptions GetProject(string? projectKey, bool allowFirst)
@@ -72,10 +73,24 @@ public sealed class DefaultOptions
     public bool Obfuscate { get; set; } = false;
 
     /// <summary>
+    /// Optimizer passes applied to PHP source before encryption (and before obfuscation when combined).
+    /// Supported values: null/"none" (disabled), "all", or comma-separated subset:
+    /// "comments", "whitespace", "constants", "deadcode".
+    /// </summary>
+    public string? Optimize { get; set; }
+
+    /// <summary>
     /// Optional path to the PHP binary used for syntax-checking source files before encryption
     /// (e.g. "/usr/bin/php8.4" or "php"). When null/empty, the check is skipped.
     /// </summary>
     public string? PhpBinary { get; set; }
+
+    /// <summary>
+    /// Optional URL where customers can download the new encrypted PHP files (e.g. a CDN or
+    /// release download link). Stored on the license server alongside the manifest and returned
+    /// by GET /api/v1/customer/builds/latest so update.php knows where to fetch the archive.
+    /// </summary>
+    public string? DownloadUrl { get; set; }
 }
 
 /// <summary>
@@ -88,6 +103,23 @@ public sealed class SigningOptions
     public string? PrivateKeyFile { get; set; }
     /// <summary>Path to PEM-encoded ECDSA-P256 public key file (for loader configuration).</summary>
     public string? PublicKeyFile { get; set; }
+}
+
+/// <summary>
+/// Optional telemetry: sends build-lifecycle events to the license server.
+/// Disabled by default — set Enabled = true to opt in.
+/// No sensitive data is sent (no buildKey, no source code, no file paths).
+/// </summary>
+public sealed class TelemetryOptions
+{
+    /// <summary>When false (default), no telemetry events are sent.</summary>
+    public bool Enabled { get; set; } = false;
+
+    /// <summary>
+    /// Override the telemetry endpoint URL.
+    /// Defaults to &lt;LicenseServer.BaseUrl&gt;/api/v1/encoder/telemetry when empty.
+    /// </summary>
+    public string? EndpointUrl { get; set; }
 }
 
 public sealed class ProjectOptions

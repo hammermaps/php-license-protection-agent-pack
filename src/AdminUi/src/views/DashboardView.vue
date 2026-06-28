@@ -55,10 +55,12 @@ function fmt(n: number) { return n.toLocaleString() }
           <div class="panel-title">Quick links</div>
         </div>
         <div style="padding:20px 24px;display:flex;gap:12px;flex-wrap:wrap">
-          <RouterLink to="/licenses" class="btn btn-outline">View Licenses</RouterLink>
-          <RouterLink to="/activations" class="btn btn-outline">View Activations</RouterLink>
-          <RouterLink to="/api-clients" class="btn btn-outline">Manage API Clients</RouterLink>
-          <RouterLink to="/audit-log" class="btn btn-outline">Audit Log</RouterLink>
+          <RouterLink to="/licenses"      class="btn btn-outline">View Licenses</RouterLink>
+          <RouterLink to="/activations"   class="btn btn-outline">View Activations</RouterLink>
+          <RouterLink to="/api-clients"   class="btn btn-outline">Manage API Clients</RouterLink>
+          <RouterLink to="/audit-log"     class="btn btn-outline">Audit Log</RouterLink>
+          <RouterLink to="/telemetry"     class="btn btn-outline">Telemetry</RouterLink>
+          <RouterLink to="/error-reports" class="btn btn-outline">Error Reports</RouterLink>
         </div>
       </div>
     </template>

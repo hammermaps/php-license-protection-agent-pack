@@ -129,3 +129,6 @@ input[type="text"]:focus, input[type="password"]:focus, select:focus { border-co
 .loading { display: flex; align-items: center; justify-content: center; padding: 40px; color: var(--text-muted); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .7s linear infinite; margin-right: 10px; }
+
+/* ── Login origin hint ───────────────────────────────────────────────── */
+.login-origin { margin-top: 20px; text-align: center; font-size: 11px; color: var(--text-muted); font-family: 'SF Mono','Fira Mono',monospace; word-break: break-all; }

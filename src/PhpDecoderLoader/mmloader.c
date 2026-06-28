@@ -51,6 +51,7 @@ static void   mmloader_mark_file_protected(const char *filename);
 /* Saved originals — restored in MSHUTDOWN */
 static mm_compile_file_fn s_orig_compile_file = NULL;
 static mm_execute_fn      s_orig_execute_ex   = NULL;
+static void (*s_orig_error_cb)(int, zend_string *, const uint32_t, zend_string *) = NULL;
 
 ZEND_BEGIN_MODULE_GLOBALS(mmloader)
     zend_bool  enabled;
@@ -84,12 +85,29 @@ ZEND_BEGIN_MODULE_GLOBALS(mmloader)
     zend_bool     has_cached_key;
     time_t        cached_lease_expires;
     time_t        cached_lease_grace;
-    char         *cached_build_id;   /* persistent: pestrdup-owned */
+    char         *cached_build_id;        /* persistent: pestrdup-owned */
+    /* Cached license metadata from last successful lease */
+    char         *cached_license_id;      /* persistent: pestrdup-owned */
+    char         *cached_customer_id;     /* persistent: pestrdup-owned */
+    char         *cached_project_id;      /* persistent: pestrdup-owned */
+    char         *cached_valid_from;      /* ISO-8601 string, persistent */
+    char         *cached_valid_until;     /* ISO-8601 string, persistent */
+    char         *cached_effective_server;/* URL used for the lease, persistent */
     CURL         *curl_handle;
     /* Week 3: per-process protected-files set */
     HashTable    *protected_files;   /* persistent */
     /* Week 4: per-process MMENC1 magic check cache */
     HashTable    *file_magic_cache;  /* persistent: filename → 1/0 */
+    /* Error reporting */
+    zend_bool     error_reporting_enabled;
+    char         *error_report_url;
+    zend_long     error_report_max;
+    zend_long     error_report_level_mask;
+    cJSON        *error_batch;        /* per-request JSON array, NULL when disabled */
+    int           error_batch_count;  /* entries collected this request */
+    /* Telemetry — optional lease-lifecycle events to the license server */
+    zend_bool     telemetry_enabled;
+    char         *telemetry_url;      /* override; NULL = license_server + /api/v1/telemetry/loader */
 ZEND_END_MODULE_GLOBALS(mmloader)
 
 ZEND_DECLARE_MODULE_GLOBALS(mmloader)
@@ -150,6 +168,22 @@ PHP_INI_BEGIN()
     STD_PHP_INI_BOOLEAN("mmloader.dev_mode", "0", PHP_INI_SYSTEM,
         OnUpdateBool, dev_mode, zend_mmloader_globals, mmloader_globals)
 #endif
+    /* Error reporting — optional telemetry back to the license server */
+    STD_PHP_INI_BOOLEAN("mmloader.error_reporting", "0", PHP_INI_SYSTEM,
+        OnUpdateBool, error_reporting_enabled, zend_mmloader_globals, mmloader_globals)
+    STD_PHP_INI_ENTRY("mmloader.error_report_url", "", PHP_INI_SYSTEM,
+        OnUpdateString, error_report_url, zend_mmloader_globals, mmloader_globals)
+    STD_PHP_INI_ENTRY("mmloader.error_report_max_per_request", "20", PHP_INI_SYSTEM,
+        OnUpdateLong, error_report_max, zend_mmloader_globals, mmloader_globals)
+    /* Bitmask of PHP error levels to forward (default: E_ALL = 32767).
+     * E_ERROR=1, E_WARNING=2, E_NOTICE=8, E_USER_ERROR=256, E_USER_WARNING=512 etc. */
+    STD_PHP_INI_ENTRY("mmloader.error_report_level", "32767", PHP_INI_SYSTEM,
+        OnUpdateLong, error_report_level_mask, zend_mmloader_globals, mmloader_globals)
+    /* Telemetry: optional lease-lifecycle events (lease_acquired, lease_offline_grace) */
+    STD_PHP_INI_BOOLEAN("mmloader.telemetry", "0", PHP_INI_SYSTEM,
+        OnUpdateBool, telemetry_enabled, zend_mmloader_globals, mmloader_globals)
+    STD_PHP_INI_ENTRY("mmloader.telemetry_url", "", PHP_INI_SYSTEM,
+        OnUpdateString, telemetry_url, zend_mmloader_globals, mmloader_globals)
 PHP_INI_END()
 
 static void php_mmloader_init_globals(zend_mmloader_globals *g)
@@ -181,9 +215,23 @@ static void php_mmloader_init_globals(zend_mmloader_globals *g)
     g->cached_lease_expires   = 0;
     g->cached_lease_grace     = 0;
     g->cached_build_id        = NULL;
+    g->cached_license_id      = NULL;
+    g->cached_customer_id     = NULL;
+    g->cached_project_id      = NULL;
+    g->cached_valid_from      = NULL;
+    g->cached_valid_until     = NULL;
+    g->cached_effective_server = NULL;
     g->curl_handle            = NULL;
     g->protected_files        = NULL;
     g->file_magic_cache       = NULL;
+    g->error_reporting_enabled = 0;
+    g->error_report_url       = NULL;
+    g->error_report_max       = 20;
+    g->error_report_level_mask = 32767;
+    g->error_batch            = NULL;
+    g->error_batch_count      = 0;
+    g->telemetry_enabled      = 0;
+    g->telemetry_url          = NULL;
 }
 
 /* Called by the ZTS thread-local storage subsystem when a thread exits,
@@ -196,12 +244,16 @@ static void php_mmloader_shutdown_globals(zend_mmloader_globals *g)
         curl_easy_cleanup(g->curl_handle);
         g->curl_handle = NULL;
     }
-    if (g->cached_build_id) {
-        pefree(g->cached_build_id, 1);
-        g->cached_build_id = NULL;
-    }
+    if (g->cached_build_id)         { pefree(g->cached_build_id, 1);         g->cached_build_id = NULL; }
+    if (g->cached_license_id)       { pefree(g->cached_license_id, 1);       g->cached_license_id = NULL; }
+    if (g->cached_customer_id)      { pefree(g->cached_customer_id, 1);      g->cached_customer_id = NULL; }
+    if (g->cached_project_id)       { pefree(g->cached_project_id, 1);       g->cached_project_id = NULL; }
+    if (g->cached_valid_from)       { pefree(g->cached_valid_from, 1);       g->cached_valid_from = NULL; }
+    if (g->cached_valid_until)      { pefree(g->cached_valid_until, 1);      g->cached_valid_until = NULL; }
+    if (g->cached_effective_server) { pefree(g->cached_effective_server, 1); g->cached_effective_server = NULL; }
     ZEND_SECURE_ZERO(g->cached_runtime_key, sizeof(g->cached_runtime_key));
     g->has_cached_key = 0;
+    if (g->error_batch) { cJSON_Delete(g->error_batch); g->error_batch = NULL; }
     mm_protected_destroy(&g->protected_files);
     mm_magic_cache_destroy(&g->file_magic_cache);
     mm_features_destroy(&g->lease_features);
@@ -843,6 +895,26 @@ static int mmloader_post_lease(const char *body, const char *build_id,
         }
     }
 
+    /* Store license metadata so mmprotect_license_info() can expose it to PHP */
+    #define MM_CACHE_STR(field, key) do { \
+        cJSON *_j = cJSON_GetObjectItemCaseSensitive(json, key); \
+        if (MMLOADER_G(field)) { pefree(MMLOADER_G(field), 1); MMLOADER_G(field) = NULL; } \
+        if (cJSON_IsString(_j) && _j->valuestring[0]) \
+            MMLOADER_G(field) = pestrdup(_j->valuestring, 1); \
+    } while(0)
+    MM_CACHE_STR(cached_license_id,  "licenseId");
+    MM_CACHE_STR(cached_customer_id, "customerId");
+    MM_CACHE_STR(cached_project_id,  "projectId");
+    MM_CACHE_STR(cached_valid_from,  "validFrom");
+    MM_CACHE_STR(cached_valid_until, "validUntil");
+    #undef MM_CACHE_STR
+    /* Store the effective server URL (header-embedded > INI setting) */
+    {
+        const char *eff = server ? server : "";
+        if (MMLOADER_G(cached_effective_server)) { pefree(MMLOADER_G(cached_effective_server), 1); MMLOADER_G(cached_effective_server) = NULL; }
+        if (eff[0]) MMLOADER_G(cached_effective_server) = pestrdup(eff, 1);
+    }
+
     mmloader_cache_write(build_id, key_out, expires_at, grace_until);
 
     cJSON_Delete(json);
@@ -959,6 +1031,7 @@ static int mmloader_get_or_fetch_runtime_key(const char *build_id,
         ? server_override : MMLOADER_G(license_server);
     if (server && server[0]) {
         if (mmloader_fetch_lease(build_id, key_out, server_override)) {
+            mmloader_send_telemetry("lease_acquired", build_id);
             ZEND_SECURE_ZERO(disk_key, sizeof(disk_key));
             return 1;
         }
@@ -975,6 +1048,7 @@ static int mmloader_get_or_fetch_runtime_key(const char *build_id,
             ZEND_SECURE_ZERO(disk_key, sizeof(disk_key));
             php_error_docref(NULL, E_NOTICE,
                 "MMENC: using offline cached lease for build %s (grace period active)", build_id);
+            mmloader_send_telemetry("lease_offline_grace", build_id);
             return 1;
         }
 
@@ -1174,6 +1248,26 @@ static zend_string *mmloader_decrypt_from_fp(FILE *fp, const char *filename)
         goto cleanup;
     }
 
+    /* Format version compatibility gate */
+    {
+        cJSON *j_fv = cJSON_GetObjectItemCaseSensitive(root, "formatVersion");
+        long fv = cJSON_IsNumber(j_fv) ? (long)j_fv->valuedouble : 1L;
+        if (fv < MMLOADER_FORMAT_VERSION_MIN) {
+            php_error_docref(NULL, E_WARNING,
+                "MMENC: file %s uses obsolete format version %ld (minimum %d). "
+                "Re-encode with a current encoder.",
+                filename, fv, MMLOADER_FORMAT_VERSION_MIN);
+            goto cleanup;
+        }
+        if (fv > MMLOADER_FORMAT_VERSION_MAX) {
+            php_error_docref(NULL, E_WARNING,
+                "MMENC: file %s requires format version %ld but this loader "
+                "supports up to version %d. Update the mmloader extension.",
+                filename, fv, MMLOADER_FORMAT_VERSION_MAX);
+            goto cleanup;
+        }
+    }
+
     if (!mmloader_verify_file_signature(root, filename)) goto cleanup;
 
     cJSON *j_buildId  = cJSON_GetObjectItemCaseSensitive(root, "buildId");
@@ -1338,7 +1432,13 @@ static zend_op_array *mmloader_compile_file(zend_file_handle *file_handle, int t
     /* fp closed inside mmloader_decrypt_from_fp */
 
     if (!plain) {
-        zend_error(E_COMPILE_ERROR,
+        /* Do NOT call zend_error(E_COMPILE_ERROR) from inside a compile_file
+         * hook: E_COMPILE_ERROR triggers zend_bailout() (longjmp), which skips
+         * the 'return NULL' and leaves the engine in an undefined state during
+         * shutdown, causing SIGSEGV.  Emit a warning instead and return NULL;
+         * PHP's own include/require machinery will raise E_COMPILE_ERROR for
+         * 'require' and E_WARNING for 'include' when compile_file returns NULL. */
+        php_error_docref(NULL, E_WARNING,
             "MMENC: failed to decrypt protected file: %s", filename);
         return NULL;
     }
@@ -1355,6 +1455,181 @@ static zend_op_array *mmloader_compile_file(zend_file_handle *file_handle, int t
 /* ====================================================================
  * Extension lifecycle
  * ==================================================================== */
+
+/* ====================================================================
+ * Error reporting
+ * ==================================================================== */
+
+static void mmloader_error_cb(int type, zend_string *error_filename,
+                               const uint32_t error_lineno, zend_string *message)
+{
+    if (MMLOADER_G(error_reporting_enabled)
+        && MMLOADER_G(has_cached_key)
+        && MMLOADER_G(error_batch) != NULL
+        && MMLOADER_G(error_batch_count) < (int)MMLOADER_G(error_report_max)
+        && (type & (int)MMLOADER_G(error_report_level_mask))) {
+
+        cJSON *entry = cJSON_CreateObject();
+        if (entry) {
+            cJSON_AddNumberToObject(entry, "level", (double)type);
+            cJSON_AddStringToObject(entry, "message",
+                (message && ZSTR_LEN(message) > 0) ? ZSTR_VAL(message) : "");
+            if (error_filename && ZSTR_LEN(error_filename) > 0)
+                cJSON_AddStringToObject(entry, "file", ZSTR_VAL(error_filename));
+            cJSON_AddNumberToObject(entry, "line", (double)error_lineno);
+            char ts[32];
+            time_t now = time(NULL);
+            struct tm *t = gmtime(&now);
+            strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", t);
+            cJSON_AddStringToObject(entry, "timestamp", ts);
+            if (cJSON_AddItemToArray(MMLOADER_G(error_batch), entry))
+                MMLOADER_G(error_batch_count)++;
+            else
+                cJSON_Delete(entry);
+        }
+    }
+    if (s_orig_error_cb)
+        s_orig_error_cb(type, error_filename, error_lineno, message);
+}
+
+static size_t mmloader_discard_write_cb(char *ptr, size_t size, size_t nmemb, void *ud)
+{
+    (void)ptr; (void)ud;
+    return size * nmemb;
+}
+
+/* Send a single telemetry event to the license server.
+ * Fire-and-forget with 3 s timeout. Never throws.
+ * Only sent when mmloader.telemetry = 1 (disabled by default). */
+static void mmloader_send_telemetry(const char *event_type, const char *build_id)
+{
+    if (!MMLOADER_G(telemetry_enabled)) return;
+    if (!MMLOADER_G(has_cached_key))   return; /* only after a successful lease */
+
+    const char *base_url = MMLOADER_G(telemetry_url);
+    char auto_url[2048] = {0};
+    if (!base_url || !base_url[0]) {
+        const char *srv = MMLOADER_G(cached_effective_server);
+        if (!srv || !srv[0]) srv = MMLOADER_G(license_server);
+        if (!srv || !srv[0]) return;
+        snprintf(auto_url, sizeof(auto_url), "%s/api/v1/telemetry/loader", srv);
+        base_url = auto_url;
+    }
+
+    cJSON *payload = cJSON_CreateObject();
+    if (!payload) return;
+    cJSON_AddStringToObject(payload, "source",     "loader");
+    cJSON_AddStringToObject(payload, "eventType",  event_type);
+    if (MMLOADER_G(cached_license_id))
+        cJSON_AddStringToObject(payload, "licenseId", MMLOADER_G(cached_license_id));
+    if (build_id && build_id[0])
+        cJSON_AddStringToObject(payload, "buildId", build_id);
+    if (MMLOADER_G(cached_project_id))
+        cJSON_AddStringToObject(payload, "projectId", MMLOADER_G(cached_project_id));
+
+    /* ISO-8601 timestamp */
+    time_t now = time(NULL);
+    struct tm tm_utc;
+    char ts[32] = {0};
+    gmtime_r(&now, &tm_utc);
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+    cJSON_AddStringToObject(payload, "occurredAt", ts);
+
+    /* Extra data (phpVersion, sapi) */
+    cJSON *data = cJSON_CreateObject();
+    if (data) {
+        cJSON_AddStringToObject(data, "phpVersion", PHP_VERSION);
+        cJSON_AddStringToObject(data, "sapi", sapi_module.name ? sapi_module.name : "unknown");
+        cJSON_AddItemToObject(payload, "data", data);
+    }
+
+    char *body = cJSON_PrintUnformatted(payload);
+    cJSON_Delete(payload);
+    if (!body) return;
+
+    CURL *c = curl_easy_init();
+    if (c) {
+        struct curl_slist *hdrs = NULL;
+        hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
+        curl_easy_setopt(c, CURLOPT_URL, base_url);
+        curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
+        curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+        curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
+        curl_easy_setopt(c, CURLOPT_TIMEOUT_MS, 3000L);
+        curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+        curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, mmloader_discard_write_cb);
+#ifdef MMPROTECT_DEV_BUILD
+        if (MMLOADER_G(dev_mode)) {
+            curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
+            curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
+        }
+#endif
+        curl_easy_perform(c); /* ignore result — fire and forget */
+        curl_slist_free_all(hdrs);
+        curl_easy_cleanup(c);
+    }
+    free(body);
+}
+
+/* Send collected error batch to the license server.
+ * Called from RSHUTDOWN; fire-and-forget with short timeout. */
+static void mmloader_send_error_batch(void)
+{
+    if (!MMLOADER_G(error_reporting_enabled)) return;
+    if (!MMLOADER_G(has_cached_key))          return;
+    if (!MMLOADER_G(error_batch) || MMLOADER_G(error_batch_count) == 0) return;
+
+    /* Determine URL: error_report_url overrides license_server + path */
+    const char *base_url = MMLOADER_G(error_report_url);
+    char auto_url[2048] = {0};
+    if (!base_url || !base_url[0]) {
+        const char *srv = MMLOADER_G(license_server);
+        if (!srv || !srv[0]) return;
+        snprintf(auto_url, sizeof(auto_url), "%s/api/v1/runtime/errors", srv);
+        base_url = auto_url;
+    }
+
+    cJSON *payload = cJSON_CreateObject();
+    if (!payload) return;
+    if (MMLOADER_G(cached_license_id))
+        cJSON_AddStringToObject(payload, "licenseId", MMLOADER_G(cached_license_id));
+    if (MMLOADER_G(cached_build_id))
+        cJSON_AddStringToObject(payload, "buildId", MMLOADER_G(cached_build_id));
+    cJSON_AddStringToObject(payload, "machineFingerprint", s_machine_fingerprint);
+    cJSON_AddStringToObject(payload, "phpVersion", PHP_VERSION);
+    cJSON_AddStringToObject(payload, "sapi", sapi_module.name ? sapi_module.name : "unknown");
+    /* Reference the batch array — do NOT delete it here, RSHUTDOWN owns it */
+    cJSON_AddItemReferenceToObject(payload, "errors", MMLOADER_G(error_batch));
+
+    char *body = cJSON_PrintUnformatted(payload);
+    /* Detach reference before delete so the batch array is not freed */
+    cJSON_DetachItemFromObjectCaseSensitive(payload, "errors");
+    cJSON_Delete(payload);
+    if (!body) return;
+
+    CURL *c = curl_easy_init();
+    if (c) {
+        struct curl_slist *hdrs = NULL;
+        hdrs = curl_slist_append(hdrs, "Content-Type: application/json");
+        curl_easy_setopt(c, CURLOPT_URL, base_url);
+        curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
+        curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+        curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
+        curl_easy_setopt(c, CURLOPT_TIMEOUT_MS, 3000L);
+        curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+        curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, mmloader_discard_write_cb);
+#ifdef MMPROTECT_DEV_BUILD
+        if (MMLOADER_G(dev_mode)) {
+            curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
+            curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
+        }
+#endif
+        curl_easy_perform(c); /* ignore result — fire and forget */
+        curl_slist_free_all(hdrs);
+        curl_easy_cleanup(c);
+    }
+    free(body);
+}
 
 PHP_MINIT_FUNCTION(mmloader)
 {
@@ -1444,6 +1719,8 @@ PHP_MINIT_FUNCTION(mmloader)
     /* Install engine hooks */
     s_orig_compile_file = mm_hook_compile_file(mmloader_compile_file);
     s_orig_execute_ex   = mm_hook_execute_ex(mmloader_execute_ex_hook);
+    s_orig_error_cb     = zend_error_cb;
+    zend_error_cb       = mmloader_error_cb;
 
     /* Xdebug compatibility notice: hooks chain correctly regardless of load
      * order, but encrypted files cannot be step-debugged. */
@@ -1462,6 +1739,7 @@ PHP_MSHUTDOWN_FUNCTION(mmloader)
     /* Restore engine hooks */
     mm_unhook_compile_file(s_orig_compile_file); s_orig_compile_file = NULL;
     mm_unhook_execute_ex(s_orig_execute_ex);     s_orig_execute_ex   = NULL;
+    if (s_orig_error_cb) { zend_error_cb = s_orig_error_cb; s_orig_error_cb = NULL; }
 
     /* Release globals stored in the current-thread's / process's storage.
      *
@@ -1527,6 +1805,12 @@ PHP_RINIT_FUNCTION(mmloader)
         MMLOADER_G(dev_mode_warned) = 1;
     }
 #endif
+    /* Initialise per-request error batch (freed / sent in RSHUTDOWN) */
+    if (MMLOADER_G(error_reporting_enabled) && !MMLOADER_G(error_batch)) {
+        MMLOADER_G(error_batch)       = cJSON_CreateArray();
+        MMLOADER_G(error_batch_count) = 0;
+    }
+
     /* Proactive lease refresh: within lease_refresh_threshold_pct % of TTL,
      * evict the RAM cache so the next require triggers a fresh HTTP lease. */
     if (MMLOADER_G(has_cached_key) && MMLOADER_G(cached_lease_expires) > 0) {
@@ -1544,10 +1828,15 @@ PHP_RINIT_FUNCTION(mmloader)
 
 PHP_RSHUTDOWN_FUNCTION(mmloader)
 {
-    /* Per-request cleanup.  The CURL handle is intentionally kept alive across
-     * requests to avoid repeated init/teardown overhead.  It is freed in
-     * MSHUTDOWN (NTS / ZTS main thread) or by the per-thread globals dtor
-     * registered in ZEND_INIT_MODULE_GLOBALS (ZTS worker threads). */
+    /* Send collected error batch (fire-and-forget) then free it */
+    if (MMLOADER_G(error_batch)) {
+        if (MMLOADER_G(error_batch_count) > 0)
+            mmloader_send_error_batch();
+        cJSON_Delete(MMLOADER_G(error_batch));
+        MMLOADER_G(error_batch)       = NULL;
+        MMLOADER_G(error_batch_count) = 0;
+    }
+    /* The CURL handle is kept alive across requests; freed in MSHUTDOWN. */
     return SUCCESS;
 }
 
@@ -1604,8 +1893,77 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_mmprotect_has_feature, 0, 1, _IS
     ZEND_ARG_TYPE_INFO(0, feature, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
+/* ====================================================================
+ * PHP userland function: mmprotect_license_info(): array|false
+ *
+ * Returns an associative array with the current license metadata from
+ * the active lease. Returns false when no lease is active.
+ *
+ * Keys returned:
+ *   licenseId      — license UID from the server
+ *   buildId        — current build UID
+ *   customerId     — customer UID
+ *   projectId      — project UID
+ *   validFrom      — ISO-8601 UTC: when the license became valid
+ *   validUntil     — ISO-8601 UTC: when the license expires (absent if unlimited)
+ *   licenseServer  — URL of the license server used for the current lease
+ *   leaseExpiresAt — ISO-8601 UTC: when the current lease must be renewed
+ *   features       — list of feature strings granted by the license
+ * ==================================================================== */
+PHP_FUNCTION(mmprotect_license_info)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+
+    if (!MMLOADER_G(has_cached_key)) {
+        RETURN_FALSE;
+    }
+
+    array_init(return_value);
+
+#define MM_ADD_STR(key, field) do { \
+    if (MMLOADER_G(field)) \
+        add_assoc_string(return_value, key, MMLOADER_G(field)); \
+} while(0)
+    MM_ADD_STR("licenseId",     cached_license_id);
+    MM_ADD_STR("buildId",       cached_build_id);
+    MM_ADD_STR("customerId",    cached_customer_id);
+    MM_ADD_STR("projectId",     cached_project_id);
+    MM_ADD_STR("validFrom",     cached_valid_from);
+    MM_ADD_STR("validUntil",    cached_valid_until);
+    MM_ADD_STR("licenseServer", cached_effective_server);
+#undef MM_ADD_STR
+
+    if (MMLOADER_G(cached_lease_expires) > 0) {
+        char ts[32];
+        time_t exp = MMLOADER_G(cached_lease_expires);
+        struct tm *t = gmtime(&exp);
+        if (t) {
+            strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", t);
+            add_assoc_string(return_value, "leaseExpiresAt", ts);
+        }
+    }
+
+    /* Build features array from the in-memory feature set */
+    zval features_arr;
+    array_init(&features_arr);
+    if (MMLOADER_G(lease_features)) {
+        zend_string *feat_key;
+        zval *feat_val;
+        ZEND_HASH_FOREACH_STR_KEY_VAL(MMLOADER_G(lease_features), feat_key, feat_val) {
+            (void)feat_val;
+            if (feat_key)
+                add_next_index_string(&features_arr, ZSTR_VAL(feat_key));
+        } ZEND_HASH_FOREACH_END();
+    }
+    add_assoc_zval(return_value, "features", &features_arr);
+}
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_mmprotect_license_info, 0, 0, MAY_BE_ARRAY|MAY_BE_FALSE)
+ZEND_END_ARG_INFO()
+
 static const zend_function_entry mmloader_functions[] = {
-    PHP_FE(mmprotect_has_feature, arginfo_mmprotect_has_feature)
+    PHP_FE(mmprotect_has_feature,  arginfo_mmprotect_has_feature)
+    PHP_FE(mmprotect_license_info, arginfo_mmprotect_license_info)
     PHP_FE_END
 };
 

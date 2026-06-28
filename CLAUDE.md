@@ -115,7 +115,8 @@ repo/
 │  ├─ proxy-setup.md             ← Reverse-Proxy / Load-Balancer-Setup + Rate-Limiting
 │  ├─ encryption-format.md       ← Verschlüsselungsformat-Referenz
 │  ├─ build-guide.md             ← Build-Anleitung für alle Komponenten
-│  └─ end-user-install.md        ← Extension-Installationsanleitung für Endkunden
+│  ├─ end-user-install.md        ← Extension-Installationsanleitung für Endkunden
+│  └─ telemetry-error-reporting.md ← Telemetrie + Fehlerberichte (Opt-in)
 ├─ jenkins/
 │  ├─ Jenkinsfile
 │  ├─ Jenkinsfile.linux
@@ -402,7 +403,7 @@ Key routing rules:
 
 ---
 
-## Implementierungsstand (Stand 2026-06-27, zuletzt aktualisiert 2026-06-28)
+## Implementierungsstand (Stand 2026-06-27, zuletzt aktualisiert 2026-06-28 Abend)
 
 ### LicenseServer (`src/LicenseServer/`) — **produktionsbereit (Krypto konfigurierbar)**
 
@@ -471,15 +472,16 @@ Alle 44 bestehen.
 | Datei | Inhalt |
 |---|---|
 | `Program.cs` | Dispatcher für `validate`/`encode`/`manifest`/`clean`/`encode-dir` |
-| `CliArgs.cs` | Argument-Parser inkl. `--source`, `--output`, `--mmignore`, `--compress`, `--dev`, `--dry-run` |
-| `Configuration/EncoderConfig.cs` | Config-Modell (JSON + XML); `DefaultOptions.Compression` für LZ4, `DefaultOptions.PhpBinary` für Syntax-Check |
+| `CliArgs.cs` | Argument-Parser inkl. `--source`, `--output`, `--mmignore`, `--compress`, `--optimize`, `--obfuscate`, `--dev`, `--dry-run` |
+| `Configuration/EncoderConfig.cs` | Config-Modell (JSON + XML); `DefaultOptions.Compression` für LZ4, `DefaultOptions.Optimize` für Optimizer-Passes, `DefaultOptions.PhpBinary` für Syntax-Check |
 | `Configuration/EncoderConfigLoader.cs` | JSON via `System.Text.Json`, XML via `XDocument` |
 | `Encoding/CryptoPrimitives.cs` | HKDF-SHA256 (Salt `SHA-256("MMProtect-HKDF-v1")`) + SHA-256-Hashing |
 | `Encoding/FileSelector.cs` | Glob-Matching mit `**`-Support, include/exclude; `exclude` gilt auch für `copyPlain` |
 | `Encoding/MmIgnoreRules.cs` | `.mmignore`-Parser + `MmIgnoreRuleSet.Evaluate()` (gitignore-Semantik, Cascade) |
 | `Encoding/MmencContainer.cs` | AES-256-GCM Container, MMENC1-Format, LZ4-Komprimierung, ECDSA-P256-Signatur |
-| `Encoding/ProjectEncoder.cs` | Vollständiger Encoding-Ablauf (Upsert→Build→Encrypt→Sign), `.mmignore`-Unterstützung |
-| `Encoding/LocalDevEncoder.cs` | Dev-Modus ohne License Server: zufälliger Build-Key, `dev-buildkey.b64` |
+| `Encoding/PhpOptimizer.cs` | Token-basierter PHP-Optimizer: Kommentare, Whitespace, Konstantenfaltung, Toter-Code-Elimination |
+| `Encoding/ProjectEncoder.cs` | Vollständiger Encoding-Ablauf (Upsert→Build→Optimize→Obfuscate→Encrypt→Sign), `.mmignore`-Unterstützung |
+| `Encoding/LocalDevEncoder.cs` | Dev-Modus ohne License Server: zufälliger Build-Key, `dev-buildkey.b64`, Optimizer-Support |
 | `Server/LicenseServerClient.cs` | HTTP-Client gegen License Server mit Bearer-Token |
 
 **Encoding-Ablauf:** Kunde/Projekt/Lizenz upsert → Build starten → Dateien per Glob oder `.mmignore` selektieren → optional LZ4-komprimieren → AES-256-GCM verschlüsseln → ECDSA-P256 signieren → Hashes registrieren → Manifest signieren → `.mmprotect/manifest.json` + `.mmprotect/license.json` schreiben.
@@ -491,11 +493,15 @@ Alle 44 bestehen.
 - `--config + --project`: Produktionsmodus mit License Server
 - `--mmignore <file>`: globale `.mmignore`-Datei
 - `--compress lz4|none`: LZ4-Komprimierung aktivieren/deaktivieren
+- `--optimize [passes]`: PHP-Quellcode vor Verschlüsselung optimieren (Passes: `all`, `none`, `comments`, `whitespace`, `constants`, `deadcode` oder kommagetrennte Kombination)
+- `--obfuscate`: PHP-Quellcode obfuskieren (nach `--optimize`)
 - `--dry-run`: nur Plan ausgeben, nichts schreiben
+
+**Optimizer-Pipeline:** `--optimize` läuft immer **vor** `--obfuscate` und **vor** der Verschlüsselung. Reihenfolge: Optimize → Obfuscate → Compress (LZ4) → Encrypt (AES-256-GCM). Vollständige Referenz: `docs/optimizer-guide.md`.
 
 **`DefaultOptions.PhpBinary`:** Optionaler Pfad zur PHP-Binary für Syntax-Check vor der Verschlüsselung (z.B. `/usr/bin/php8.4`). Wenn gesetzt, bricht der Encoder mit Fehlermeldung ab, wenn eine Datei einen PHP-Syntaxfehler enthält.
 
-**Tests:** `EncoderCli.Tests/` – **58 Tests** (Glob/FileSelector + MmIgnore + Compression + Obfuscator + Assemble). Alle 58 bestehen.
+**Tests:** `EncoderCli.Tests/` – **90 Tests** (Glob/FileSelector + MmIgnore + Compression + Obfuscator + Optimizer + Assemble). Alle 90 bestehen.
 
 ---
 
@@ -505,7 +511,7 @@ Alle 44 bestehen.
 
 | Datei | Inhalt |
 |---|---|
-| `php_mmloader.h` | Header, Versionskonstante `0.1.0` |
+| `php_mmloader.h` | Header, Versionskonstante `0.1.0`, `MMLOADER_FORMAT_VERSION_MIN/MAX` |
 | `config.m4` | Linux phpize-Build-Config, linkt `-lssl -lcrypto -lcurl`; kompiliert vendor/lz4 |
 | `config.w32` | Windows PHP-SDK-Build-Config (Skeleton) |
 | `mmloader.c` | Vollständige Zend Extension inkl. LZ4-Dekomprimierung |
@@ -519,6 +525,7 @@ Alle 44 bestehen.
 | `zend_compile_file`-Hook | ✓ |
 | MMENC1-Magic-Erkennung | ✓ |
 | JSON-Header parsen (cJSON) | ✓ |
+| Format-Version-Prüfung (`formatVersion` gegen MIN/MAX) | ✓ |
 | ECDSA-P256-Signatur prüfen (OpenSSL EVP) | ✓ |
 | manifest.json + license.json lesen | ✓ |
 | Machine Fingerprint (`/etc/machine-id` + hostname, SHA-256) | ✓ |
@@ -538,11 +545,15 @@ Alle 44 bestehen.
 | Dev-Mode E_WARNING (einmalig pro Prozess) | ✓ |
 | Feature-Gates: `lease_features` HashTable + `mmprotect_has_feature()` | ✓ |
 | INI-Parameter (enabled, license_server, cache_dir, timeouts, …) | ✓ |
+| Crash-sicheres Fehlerhandling (E_WARNING statt E_COMPILE_ERROR bei Decrypt-Fehler) | ✓ |
+| Fuzz-Tests: 27 Corpus-Fälle — kein Crash, kein Bypass | ✓ |
 
 **Build:**
 ```bash
-# PHP 8.4
+# PHP 8.4 — Release
 cd src/PhpDecoderLoader && phpize && ./configure --enable-mmloader && make -j$(nproc)
+# PHP 8.4 — Dev (inkl. dev_mode, kein Signing-Key nötig)
+scripts/linux/build-decoder-dev.sh
 # PHP 8.5 (benötigt php8.5-dev)
 scripts/linux/build-decoder-php85.sh
 ```

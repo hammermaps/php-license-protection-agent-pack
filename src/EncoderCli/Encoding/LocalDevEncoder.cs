@@ -22,7 +22,8 @@ public sealed class LocalDevEncoder
         bool dryRun,
         string? compression = null,
         string? licenseServerUrl = null,
-        bool obfuscate = false)
+        bool obfuscate = false,
+        string? optimize = null)
     {
         sourceRoot = Path.GetFullPath(sourceRoot);
         outputRoot = Path.GetFullPath(outputRoot);
@@ -75,6 +76,13 @@ public sealed class LocalDevEncoder
 
             // action == Encode
             var plain = await File.ReadAllBytesAsync(absPath);
+            var optimizePasses = PhpOptimizer.ParsePasses(optimize);
+            if (optimizePasses != OptimizePasses.None)
+            {
+                var text = System.Text.Encoding.UTF8.GetString(plain);
+                text = PhpOptimizer.Optimize(text, optimizePasses);
+                plain = System.Text.Encoding.UTF8.GetBytes(text);
+            }
             if (obfuscate)
             {
                 var text = System.Text.Encoding.UTF8.GetString(plain);

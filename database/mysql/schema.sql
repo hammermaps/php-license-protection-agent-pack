@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS builds (
   encoder_version VARCHAR(64) NULL,
   manifest_hash VARCHAR(128) NULL,
   manifest_signature TEXT NULL,
+  manifest_json MEDIUMTEXT NULL,
+  download_url VARCHAR(2048) NULL,
   file_count INT UNSIGNED NOT NULL DEFAULT 0,
   status ENUM('started','files_registered','signed','revoked') NOT NULL DEFAULT 'started',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -189,4 +191,41 @@ CREATE TABLE IF NOT EXISTS audit_log (
   UNIQUE KEY uq_audit_event_uid (event_uid),
   KEY idx_audit_entity (entity_type, entity_uid),
   KEY idx_audit_event_type (event_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS error_reports (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  build_id BIGINT UNSIGNED NULL,
+  license_uid VARCHAR(64) NOT NULL,
+  machine_fingerprint VARCHAR(128) NULL,
+  reported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  error_level INT NOT NULL,
+  error_message TEXT NOT NULL,
+  error_file VARCHAR(1024) NULL,
+  error_line INT NULL,
+  php_version VARCHAR(32) NULL,
+  sapi VARCHAR(64) NULL,
+  PRIMARY KEY (id),
+  KEY idx_error_reports_license (license_uid),
+  KEY idx_error_reports_build (build_id),
+  KEY idx_error_reports_time (reported_at),
+  CONSTRAINT fk_error_reports_build FOREIGN KEY (build_id) REFERENCES builds(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Optional telemetry from EncoderCLI and PHP Loader (disabled by default on client side)
+CREATE TABLE IF NOT EXISTS telemetry_events (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  source       ENUM('encoder','loader') NOT NULL,
+  event_type   VARCHAR(64) NOT NULL,
+  license_uid  VARCHAR(64) NULL,
+  build_uid    VARCHAR(64) NULL,
+  project_uid  VARCHAR(64) NULL,
+  payload_json JSON NULL,
+  occurred_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  client_ip    VARCHAR(64) NULL,
+  PRIMARY KEY (id),
+  KEY idx_telemetry_source  (source),
+  KEY idx_telemetry_event   (event_type),
+  KEY idx_telemetry_time    (occurred_at),
+  KEY idx_telemetry_license (license_uid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

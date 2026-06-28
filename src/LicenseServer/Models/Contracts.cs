@@ -46,7 +46,7 @@ public sealed record BuildFileDto(
     string Algorithm,
     string Kdf);
 
-public sealed record ManifestSignRequest(string ManifestHash, int FileCount);
+public sealed record ManifestSignRequest(string ManifestHash, int FileCount, string? ManifestJson = null, string? DownloadUrl = null);
 public sealed record ManifestSignResponse(string ManifestSignature, string VendorPublicKeyId, DateTimeOffset ServerTimeUtc);
 
 /* ── Runtime API ─────────────────────────────────────────────────────────── */
@@ -79,7 +79,56 @@ public sealed record RuntimeLeaseResponse(
     DateTimeOffset ExpiresAt,
     DateTimeOffset GraceUntil,
     string Signature,
-    string[]? Features = null);
+    string[]? Features = null,
+    DateTimeOffset? ValidFrom = null,
+    DateTimeOffset? ValidUntil = null);
+
+/* ── Customer Update API ────────────────────────────────────────────────── */
+
+public sealed record CustomerManifestResponse(
+    string BuildId,
+    string ManifestJson,
+    string ManifestSignature,
+    DateTimeOffset SignedAt,
+    string? DownloadUrl = null);
+
+/* ── Runtime Error Reporting ─────────────────────────────────────────────── */
+
+public sealed record ErrorReportRequest(
+    string LicenseId,
+    string BuildId,
+    string MachineFingerprint,
+    string PhpVersion,
+    string Sapi,
+    ErrorReportEntry[] Errors);
+
+public sealed record ErrorReportEntry(
+    int Level,
+    string Message,
+    string? File,
+    int? Line,
+    string Timestamp);
+
+/* ── Telemetry ───────────────────────────────────────────────────────────── */
+
+public sealed record TelemetryEventRequest(
+    string Source,
+    string EventType,
+    string? LicenseId,
+    string? BuildId,
+    string? ProjectId,
+    DateTimeOffset OccurredAt,
+    Dictionary<string, string>? Data = null);
+
+public sealed record AdminTelemetryDto(
+    long Id,
+    string Source,
+    string EventType,
+    string? LicenseId,
+    string? BuildId,
+    string? ProjectId,
+    string OccurredAt,
+    string? PayloadJson);
 
 /* ── Admin API ───────────────────────────────────────────────────────────── */
 
@@ -114,6 +163,19 @@ public sealed record AdminAuditEventDto(
     string? IpAddress,
     string? Details,
     DateTime CreatedAt);
+
+public sealed record AdminErrorReportDto(
+    long Id,
+    string LicenseId,
+    string? BuildId,
+    string ReportedAt,
+    int ErrorLevel,
+    string ErrorMessage,
+    string? ErrorFile,
+    int? ErrorLine,
+    string? PhpVersion,
+    string? Sapi,
+    string? MachineFingerprint);
 
 /* ── API-Client Management ───────────────────────────────────────────────── */
 

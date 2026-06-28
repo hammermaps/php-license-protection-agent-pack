@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS builds (
   encoder_version    TEXT,
   manifest_hash      TEXT,
   manifest_signature TEXT,
+  manifest_json      TEXT,
+  download_url       TEXT,
   file_count         INTEGER NOT NULL DEFAULT 0,
   status             TEXT NOT NULL DEFAULT 'started' CHECK(status IN ('started','files_registered','signed','revoked')),
   created_at         TEXT NOT NULL DEFAULT (datetime('now')),
@@ -158,3 +160,39 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_audit_entity     ON audit_log(entity_type, entity_uid);
 CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_log(event_type);
+
+CREATE TABLE IF NOT EXISTS error_reports (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  build_id            INTEGER REFERENCES builds(id) ON DELETE SET NULL,
+  license_uid         TEXT NOT NULL,
+  machine_fingerprint TEXT,
+  reported_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  error_level         INTEGER NOT NULL,
+  error_message       TEXT NOT NULL,
+  error_file          TEXT,
+  error_line          INTEGER,
+  php_version         TEXT,
+  sapi                TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_error_reports_license ON error_reports(license_uid);
+CREATE INDEX IF NOT EXISTS idx_error_reports_build   ON error_reports(build_id);
+CREATE INDEX IF NOT EXISTS idx_error_reports_time    ON error_reports(reported_at);
+
+-- Optional telemetry from EncoderCLI and PHP Loader (disabled by default on client side)
+CREATE TABLE IF NOT EXISTS telemetry_events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  source       TEXT NOT NULL CHECK(source IN ('encoder','loader')),
+  event_type   TEXT NOT NULL,
+  license_uid  TEXT,
+  build_uid    TEXT,
+  project_uid  TEXT,
+  payload_json TEXT,
+  occurred_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  client_ip    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_source ON telemetry_events(source);
+CREATE INDEX IF NOT EXISTS idx_telemetry_event  ON telemetry_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_telemetry_time   ON telemetry_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_telemetry_license ON telemetry_events(license_uid);

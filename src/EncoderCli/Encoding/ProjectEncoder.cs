@@ -1,5 +1,6 @@
 using MmProtect.EncoderCli.Configuration;
 using MmProtect.EncoderCli.Server;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace MmProtect.EncoderCli.Encoding;
@@ -48,6 +49,8 @@ public sealed class ProjectEncoder
         Console.WriteLine($"Quelle:  {sourceRoot}");
         Console.WriteLine($"Ziel:    {outputRoot}");
 
+        var sw = config.Telemetry.Enabled ? Stopwatch.StartNew() : null;
+
         var customer = await _client.UpsertCustomerAsync(new
         {
             project.Customer.ExternalCustomerRef,
@@ -84,6 +87,12 @@ public sealed class ProjectEncoder
             sourceRevision = project.SourceRevision,
             encoderVersion = typeof(ProjectEncoder).Assembly.GetName().Version?.ToString() ?? "dev"
         });
+
+        if (config.Telemetry.Enabled)
+            await _client.SendTelemetryAsync("build_started", build.BuildId,
+                serverProject.ProjectId, license.LicenseId,
+                new Dictionary<string, string> { ["version"] = project.Version },
+                config.Telemetry.EndpointUrl);
 
         // Load .mmignore files from the source tree (cascading)
         var mmIgnoreFile = config.Defaults.MmIgnoreFile;
@@ -137,6 +146,13 @@ public sealed class ProjectEncoder
                 PhpLint(config.Defaults.PhpBinary, path, relative);
 
             var plain = await File.ReadAllBytesAsync(path);
+            var optimizePasses = PhpOptimizer.ParsePasses(config.Defaults.Optimize);
+            if (optimizePasses != OptimizePasses.None)
+            {
+                var text = System.Text.Encoding.UTF8.GetString(plain);
+                text = PhpOptimizer.Optimize(text, optimizePasses);
+                plain = System.Text.Encoding.UTF8.GetBytes(text);
+            }
             if (config.Defaults.Obfuscate)
             {
                 var text = System.Text.Encoding.UTF8.GetString(plain);
@@ -226,10 +242,17 @@ public sealed class ProjectEncoder
             JsonSerializer.SerializeToUtf8Bytes(
                 manifest with { ManifestHash = "", Signature = "" },
                 JsonOptions.Compact));
+        // Compute the final compact manifest JSON (with signature placeholder) so we can
+        // upload it to the server for the customer auto-update endpoint.
+        var manifestForUpload = manifest with { ManifestHash = manifestHash, Signature = "" };
+        var manifestJsonCompact = JsonSerializer.Serialize(manifestForUpload, JsonOptions.Compact);
+
         var sign = await _client.SignManifestAsync(build.BuildId, new
         {
             manifestHash,
-            fileCount = manifestFiles.Count
+            fileCount = manifestFiles.Count,
+            manifestJson = manifestJsonCompact,
+            downloadUrl = config.Defaults.DownloadUrl
         });
 
         manifest = manifest with
@@ -237,6 +260,19 @@ public sealed class ProjectEncoder
             ManifestHash = manifestHash,
             Signature = sign.ManifestSignature
         };
+
+        if (config.Telemetry.Enabled)
+            await _client.SendTelemetryAsync("build_completed", build.BuildId,
+                serverProject.ProjectId, license.LicenseId,
+                new Dictionary<string, string>
+                {
+                    ["fileCount"]           = manifestFiles.Count.ToString(),
+                    ["durationMs"]          = sw?.ElapsedMilliseconds.ToString() ?? "0",
+                    ["compressionEnabled"]  = (config.Defaults.Compression == "lz4" ? "true" : "false"),
+                    ["obfuscateEnabled"]    = config.Defaults.Obfuscate.ToString().ToLowerInvariant(),
+                    ["optimizeEnabled"]     = (!string.IsNullOrEmpty(config.Defaults.Optimize) && config.Defaults.Optimize != "none").ToString().ToLowerInvariant(),
+                },
+                config.Telemetry.EndpointUrl);
 
         // Second pass: write all encrypted files with the correct manifestHash
         foreach (var (outPath, fileHeader, ciphertext) in pendingFiles)

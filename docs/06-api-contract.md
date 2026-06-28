@@ -166,9 +166,13 @@ Request:
 ```json
 {
   "manifestHash": "sha256:...",
-  "fileCount": 42
+  "fileCount": 42,
+  "manifestJson": "{...}",
+  "downloadUrl": "https://cdn.example.com/releases/v1.0.0.zip"
 }
 ```
+
+> `manifestJson` und `downloadUrl` sind optional. Wenn gesetzt, speichert der Server das Manifest und die Download-URL für den Kunden-Update-Endpunkt.
 
 Response:
 
@@ -179,6 +183,36 @@ Response:
   "serverTimeUtc": "2026-06-26T12:00:00Z"
 }
 ```
+
+### POST /api/v1/encoder/telemetry
+
+Optionale Build-Lifecycle-Ereignisse vom EncoderCLI. Kein Pflichtfeld — aktiviert per `Telemetry:Enabled = true` in der Encoder-Konfiguration.
+
+Auth: `Authorization: Bearer <encoder-api-key>` (gleicher Key wie Encoder-Gruppe)
+
+Request:
+
+```json
+{
+  "source": "encoder",
+  "eventType": "build_completed",
+  "licenseId": "lic_01J...",
+  "buildId": "build_01J...",
+  "projectId": "proj_01J...",
+  "occurredAt": "2026-06-29T10:00:00Z",
+  "data": {
+    "fileCount": "42",
+    "durationMs": "1234",
+    "compressionEnabled": "true",
+    "obfuscateEnabled": "false",
+    "optimizeEnabled": "false"
+  }
+}
+```
+
+Mögliche `eventType`-Werte: `build_started`, `build_completed`, `build_failed`
+
+Response: `{ "accepted": 1 }`
 
 ### POST /api/v1/runtime/lease
 
@@ -220,9 +254,100 @@ Response:
   "expiresAt": "2026-06-27T12:00:00Z",
   "graceUntil": "2026-07-03T12:00:00Z",
   "features": ["base", "premium"],
-  "signature": "base64..."
+  "signature": "base64...",
+  "validFrom": "2026-01-01T00:00:00Z",
+  "validUntil": "2027-01-01T00:00:00Z"
 }
 ```
+
+> `validFrom` und `validUntil` entsprechen den Lizenz-Gültigkeitsgrenzen und werden von `mmprotect_license_info()` im PHP-Skript exponiert.
+
+---
+
+## Kunden-Update-API
+
+### GET /api/v1/customer/builds/latest
+
+Gibt das neueste signierte Manifest für eine Lizenz zurück. Ermöglicht `update.php` auf der Kundenseite, Versionsänderungen zu erkennen.
+
+Auth: `?licenseId=lic_...&licenseKey=MM-...` (beide aus `.mmprotect/license.json`)
+
+Response:
+
+```json
+{
+  "buildId": "build_01J...",
+  "manifestJson": "{...}",
+  "manifestSignature": "base64...",
+  "signedAt": "2026-06-29T10:00:00Z",
+  "downloadUrl": "https://cdn.example.com/releases/v1.0.0.zip"
+}
+```
+
+> `downloadUrl` ist optional — nur vorhanden wenn beim Encoder `Defaults.DownloadUrl` gesetzt war.
+
+---
+
+## Runtime Error Reporting
+
+### POST /api/v1/runtime/errors
+
+Empfängt PHP-Fehler-Batches vom mmloader (per-Request, fire-and-forget).
+Aktiviert via `mmloader.error_reporting = 1` in `php.ini`.
+
+Auth: Kein Secret erforderlich — nur `licenseId` + `buildId` im Body (nicht sicherheitsrelevante Telemetrie).
+
+Request:
+
+```json
+{
+  "licenseId": "lic_01J...",
+  "buildId": "build_01J...",
+  "machineFingerprint": "sha256:...",
+  "phpVersion": "8.4.1",
+  "sapi": "fpm-fcgi",
+  "errors": [
+    {
+      "level": 2,
+      "message": "Undefined variable $foo",
+      "file": "src/App/Controller.php",
+      "line": 42,
+      "timestamp": "2026-06-29T10:00:01Z"
+    }
+  ]
+}
+```
+
+Response: `{ "accepted": 1 }`
+
+### POST /api/v1/telemetry/loader
+
+Empfängt Lease-Lifecycle-Ereignisse vom mmloader.
+Aktiviert via `mmloader.telemetry = 1` in `php.ini`.
+
+Auth: Kein Secret — nur `licenseId` (nicht sicherheitsrelevante Betriebsdaten).
+Rate-Limit: Gemeinsam mit `/runtime/lease` (IP-basiert).
+
+Request:
+
+```json
+{
+  "source": "loader",
+  "eventType": "lease_acquired",
+  "licenseId": "lic_01J...",
+  "buildId": "build_01J...",
+  "projectId": "proj_01J...",
+  "occurredAt": "2026-06-29T10:00:00Z",
+  "data": {
+    "phpVersion": "8.4.1",
+    "sapi": "fpm-fcgi"
+  }
+}
+```
+
+Mögliche `eventType`-Werte: `lease_acquired`, `lease_offline_grace`
+
+Response: `{ "accepted": 1 }`
 
 ## Fehlerformat
 
@@ -322,6 +447,51 @@ Response: `{ "uid": "client_...", "name": "CI-Pipeline", "apiKey": "mmk_..." }`
 Soft-löscht einen API-Client (`is_active = 0`). Der Eintrag bleibt in der Listantwort mit `"isActive": false`.
 
 Response: `{ "deleted": true }`
+
+### GET /api/v1/admin/error-reports
+
+Zeigt vom mmloader gemeldete PHP-Fehler an. Optionale Parameter: `?licenseId=lic_...&buildId=build_...&limit=100`
+
+Response: `{ "reports": [...] }` — Array von `AdminErrorReportDto`:
+
+```json
+[
+  {
+    "id": 1,
+    "licenseId": "lic_01J...",
+    "buildId": "build_01J...",
+    "reportedAt": "2026-06-29T10:00:01Z",
+    "errorLevel": 2,
+    "errorMessage": "Undefined variable $foo",
+    "errorFile": "src/App/Controller.php",
+    "errorLine": 42,
+    "phpVersion": "8.4.1",
+    "sapi": "fpm-fcgi",
+    "machineFingerprint": "sha256:..."
+  }
+]
+```
+
+### GET /api/v1/admin/telemetry
+
+Zeigt Telemetrie-Ereignisse von Encoder und Loader an. Optionale Parameter: `?source=encoder|loader&licenseId=lic_...&projectId=proj_...&limit=200`
+
+Response: `{ "events": [...] }` — Array von `AdminTelemetryDto`:
+
+```json
+[
+  {
+    "id": 1,
+    "source": "encoder",
+    "eventType": "build_completed",
+    "licenseId": "lic_01J...",
+    "buildId": "build_01J...",
+    "projectId": "proj_01J...",
+    "occurredAt": "2026-06-29T10:00:00Z",
+    "payloadJson": "{\"fileCount\":\"42\",\"durationMs\":\"1234\"}"
+  }
+]
+```
 
 ---
 

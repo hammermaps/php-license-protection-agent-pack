@@ -61,17 +61,22 @@ scripts\windows\clean.cmd
 
 ## Erwartete Artefakte
 
+Der Encoder CLI wird als **self-contained single-file binary** für vier Plattformen gebaut — kein .NET auf der Zielmaschine nötig:
+
 ```text
 artifacts/
 ├─ server/
-│  ├─ linux-x64/   MmProtect.LicenseServer.dll
+│  ├─ linux-x64/       MmProtect.LicenseServer.dll
 │  └─ win-x64/
 ├─ encoder/
-│  ├─ linux-x64/   mmencoder
-│  └─ win-x64/     mmencoder.exe
+│  ├─ linux-x64/       mmencoder         (self-contained, ~60–90 MB)
+│  ├─ linux-arm64/     mmencoder         (Graviton, Raspberry Pi)
+│  ├─ linux-x64-dev/   mmencoder         (Dev-Build mit --dev)
+│  ├─ win-x64/         mmencoder.exe     (self-contained, kein .NET nötig)
+│  └─ win-arm64/       mmencoder.exe     (Surface Pro X, Snapdragon X)
 ├─ decoder/
-│  ├─ linux-x64/   mmloader.so, mmloader-php85.so, mmloader-dev.so (Dev)
-│  └─ win-x64/     php_mmloader.dll
+│  ├─ linux-x64/       mmloader.so, mmloader-php85.so, mmloader-dev.so (Dev)
+│  └─ win-x64/         php_mmloader.dll
 └─ release/
    └─ mmprotect-<version>.zip
 ```
@@ -119,8 +124,8 @@ openssl version     # OpenSSL 3.x
 
 | Projekt | Befehl | Tests | Abdeckung |
 |---|---|---|---|
-| `LicenseServer.Tests` | `dotnet test src/LicenseServer.Tests/` | **41 Tests** | 33 SmokeTests (Encoder-Flow, Lease, Revocation, Constraints, Admin-API) + 8 CryptoTests (KEK AES-GCM, ECDSA, HMAC-Fallback) |
-| `EncoderCli.Tests` | `dotnet test src/EncoderCli.Tests/` | **57 Tests** | Glob/FileSelector, MmIgnore, Compression, Obfuscator |
+| `LicenseServer.Tests` | `dotnet test src/LicenseServer.Tests/` | **44 Tests** | 33 SmokeTests (Encoder-Flow, Lease, Revocation, Constraints, Admin-API, Telemetrie) + 11 CryptoTests (KEK AES-GCM, ECDSA, HMAC-Fallback, JsonCanonical) |
+| `EncoderCli.Tests` | `dotnet test src/EncoderCli.Tests/` | **90 Tests** | Glob/FileSelector, MmIgnore, Compression, Obfuscator, Optimizer, Assemble |
 
 Alle Tests laufen gegen eine In-Memory-SQLite-Datenbank via `WebApplicationFactory`. Keine MySQL-Instanz erforderlich.
 
@@ -207,5 +212,17 @@ Datei: `jenkins/Jenkinsfile` — kann Linux- und Windows-Agents parallel verwend
 - Pull Request darf nur grün werden, wenn alle Tests bestehen.
 - Kein Test-Log darf Keys, Passwörter oder Klartextcode enthalten.
 - Artefakte werden versioniert und als Jenkins-Artefakte archiviert.
-- Server und Encoder werden für Windows und Linux veröffentlicht.
+- Encoder wird für alle vier Plattformen selbstenthalten gebaut (linux-x64, linux-arm64, win-x64, win-arm64).
+- Server wird für Windows und Linux veröffentlicht.
 - Decoder erzeugt passende `.so` (Linux) oder `.dll` (Windows).
+
+---
+
+## Weitere Dokumentation
+
+| Dokument | Thema |
+|----------|-------|
+| `docs/build-guide.md` | Vollständige Build-Anleitung, alle Plattformen |
+| `docs/telemetry-error-reporting.md` | Telemetrie und Fehlerberichte — Opt-in-Features |
+| `docs/operator-guide.md` | Serverbetrieb, Schlüsselverwaltung, Admin-API |
+| `docs/end-user-install.md` | PHP-Extension-Installation (Endkunde) |

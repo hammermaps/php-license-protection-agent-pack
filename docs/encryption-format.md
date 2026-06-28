@@ -28,7 +28,7 @@ All fields are required unless noted as optional.
 | Field | Type | Description |
 |-------|------|-------------|
 | `format` | string | Always `"MMENC1"` |
-| `formatVersion` | int | Always `1` |
+| `formatVersion` | int | Format version (currently `1`). **Mandatory since format v1.** The loader rejects files with `formatVersion < MMLOADER_FORMAT_VERSION_MIN` (obsolete) or `> MMLOADER_FORMAT_VERSION_MAX` (too new). |
 | `projectId` | string | Opaque UID from the license server |
 | `customerId` | string | Opaque UID from the license server |
 | `licenseId` | string | License UID the file was encoded under |
@@ -278,6 +278,31 @@ The loader:
 | Machine binding | `machineFingerprint` in lease and lease signature |
 | Forward secrecy | Not provided — build key is long-lived |
 | Offline operation | Disk-cached lease within grace period |
+
+---
+
+## Format Version Management
+
+The `formatVersion` field in the JSON header prevents silent mismatches between encoder versions and loader versions:
+
+| Scenario | Loader behaviour |
+|---|---|
+| `formatVersion` missing (old file) | Treated as version `1` (backward compatible) |
+| `formatVersion == 1` (current) | Accepted |
+| `formatVersion < MMLOADER_FORMAT_VERSION_MIN` | Rejected with `E_WARNING`: "uses obsolete format version — re-encode" |
+| `formatVersion > MMLOADER_FORMAT_VERSION_MAX` | Rejected with `E_WARNING`: "requires newer loader — update mmloader" |
+
+The version bounds are defined in `src/PhpDecoderLoader/php_mmloader.h`:
+
+```c
+#define MMLOADER_FORMAT_VERSION_MIN 1
+#define MMLOADER_FORMAT_VERSION_MAX 1
+```
+
+When a new incompatible format change is introduced:
+1. Bump the encoder's `FormatVersion` constant (in `MmencContainer.cs`).
+2. Update `MMLOADER_FORMAT_VERSION_MAX` in `php_mmloader.h` after the loader is updated to understand the new version.
+3. Retire old `MIN` only when backward compatibility is intentionally dropped.
 
 ---
 

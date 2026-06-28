@@ -15,6 +15,14 @@ fi
 
 dotnet restore "$PROJECT"
 dotnet test "src/EncoderCli.Tests/EncoderCli.Tests.csproj" --configuration Release || true
-dotnet publish "$PROJECT" -c Release -r linux-x64 --self-contained false -o "$OUT"
 
-echo "[build-encoder] Artefakt: $OUT"
+# linux-x64 — self-contained single-file binary (no .NET required on target)
+dotnet publish "$PROJECT" -c Release -r linux-x64 --self-contained true -o "$OUT"
+echo "[build-encoder] linux-x64: $OUT/mmencoder  ($(du -sh "$OUT/mmencoder" 2>/dev/null | cut -f1 || echo '?'))"
+
+# linux-arm64 — Raspberry Pi, AWS Graviton, Apple M1 Linux etc.
+OUT_ARM="artifacts/encoder/linux-arm64"
+dotnet publish "$PROJECT" -c Release -r linux-arm64 --self-contained true -o "$OUT_ARM"
+echo "[build-encoder] linux-arm64: $OUT_ARM/mmencoder  ($(du -sh "$OUT_ARM/mmencoder" 2>/dev/null | cut -f1 || echo '?'))"
+
+echo "[build-encoder] Fertig — selbstständige Binaries, kein .NET auf dem Zielsystem nötig."

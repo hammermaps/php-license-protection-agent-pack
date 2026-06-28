@@ -11,6 +11,11 @@
     "writeManifest": true,
     "devMode": true
   },
+  "telemetry": {
+    "enabled": false,
+    "_comment": "Optional: sends build_started/build_completed events to the license server. No secrets, no source code. Set enabled=true to opt in.",
+    "endpointUrl": ""
+  },
   "projects": [
     {
       "projectKey": "mangelmelder",

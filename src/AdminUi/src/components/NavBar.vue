@@ -12,11 +12,13 @@ function logout() {
 }
 
 const links = [
-  { to: '/',            label: 'Dashboard',    icon: 'grid' },
-  { to: '/licenses',    label: 'Licenses',     icon: 'key' },
-  { to: '/activations', label: 'Activations',  icon: 'monitor' },
-  { to: '/api-clients', label: 'API Clients',  icon: 'terminal' },
-  { to: '/audit-log',   label: 'Audit Log',    icon: 'list' },
+  { to: '/',             label: 'Dashboard',     icon: 'grid'    },
+  { to: '/licenses',     label: 'Licenses',      icon: 'key'     },
+  { to: '/activations',  label: 'Activations',   icon: 'monitor' },
+  { to: '/api-clients',  label: 'API Clients',   icon: 'terminal'},
+  { to: '/audit-log',    label: 'Audit Log',     icon: 'list'    },
+  { to: '/telemetry',    label: 'Telemetry',     icon: 'chart'   },
+  { to: '/error-reports',label: 'Error Reports', icon: 'alert'   },
 ]
 
 function isActive(to: string) {
@@ -61,6 +63,14 @@ function isActive(to: string) {
           <!-- list -->
           <template v-else-if="link.icon === 'list'">
             <path fill-rule="evenodd" d="M3 4a1 1 0 000 2h.01a1 1 0 000-2H3zm3 0a1 1 0 000 2h8a1 1 0 100-2H6zM3 8a1 1 0 000 2h.01a1 1 0 000-2H3zm3 0a1 1 0 000 2h8a1 1 0 100-2H6zM3 12a1 1 0 000 2h.01a1 1 0 000-2H3zm3 0a1 1 0 000 2h8a1 1 0 100-2H6z" clip-rule="evenodd"/>
+          </template>
+          <!-- chart (telemetry) -->
+          <template v-else-if="link.icon === 'chart'">
+            <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/>
+          </template>
+          <!-- alert (error reports) -->
+          <template v-else-if="link.icon === 'alert'">
+            <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
           </template>
         </svg>
         {{ link.label }}
