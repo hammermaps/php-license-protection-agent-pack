@@ -80,7 +80,7 @@ ZEND_BEGIN_MODULE_GLOBALS(mmloader)
     zend_bool     has_cached_key;
     time_t        cached_lease_expires;
     time_t        cached_lease_grace;
-    char         *cached_build_id;   /* malloc-owned */
+    char         *cached_build_id;   /* persistent: pestrdup-owned */
     CURL         *curl_handle;
     /* Week 3: per-process protected-files set */
     HashTable    *protected_files;   /* persistent */
@@ -209,11 +209,9 @@ static char *mmloader_base64_encode(const unsigned char *data, size_t len)
 
     BUF_MEM *bptr;
     BIO_get_mem_ptr(b64, &bptr);
-    char *out = malloc(bptr->length + 1);
-    if (out) {
-        memcpy(out, bptr->data, bptr->length);
-        out[bptr->length] = '\0';
-    }
+    char *out = emalloc(bptr->length + 1);
+    memcpy(out, bptr->data, bptr->length);
+    out[bptr->length] = '\0';
     BIO_free_all(b64);
     return out;
 }
@@ -398,7 +396,7 @@ static int mmloader_verify_file_signature(cJSON *root, const char *filename)
         EVP_Digest(data, data_len, hash, &hash_len, EVP_sha256(), NULL);
         char *expected_b64 = mmloader_base64_encode(hash, 32);
         ok = (expected_b64 && strcmp(expected_b64, j_sig->valuestring) == 0);
-        if (expected_b64) free(expected_b64);
+        if (expected_b64) efree(expected_b64);
 #else
     } else {
         /* Release: signing key is mandatory — hard error */
@@ -490,7 +488,7 @@ static int mmloader_verify_lease_signature(cJSON *resp, const char *build_id)
             "MMENC: lease HMAC signature mismatch (dev crypto — configure "
             "mmloader.signing_public_key_file for ECDSA-P256)");
     }
-    free(expected_b64);
+    efree(expected_b64);
     return 1; /* non-blocking in dev build */
 #else
     /* Release: ECDSA key is mandatory */
@@ -553,7 +551,7 @@ static void mmloader_cache_write(const char *build_id,
     cJSON_Delete(obj);
 
     ZEND_SECURE_ZERO(key_b64, strlen(key_b64));
-    free(key_b64);
+    efree(key_b64);
 
     if (!json) return;
 
@@ -570,7 +568,7 @@ static void mmloader_cache_write(const char *build_id,
     }
 
     ZEND_SECURE_ZERO(json, strlen(json));
-    free(json);
+    cJSON_free(json);
 }
 
 static int mmloader_cache_read(const char *build_id,
@@ -640,7 +638,7 @@ static size_t mmloader_lease_write_cb(char *ptr, size_t size, size_t nmemb, void
     lease_buf_t *buf = (lease_buf_t *)userdata;
     if (buf->len + n + 1 > buf->cap) {
         size_t new_cap = (buf->len + n + 1) * 2;
-        char *nd = realloc(buf->data, new_cap);
+        char *nd = erealloc(buf->data, new_cap);
         if (!nd) return 0;
         buf->data = nd; buf->cap = new_cap;
     }
@@ -710,8 +708,7 @@ static int mmloader_post_lease(const char *body, const char *build_id,
     snprintf(url, url_len, "%s/api/v1/runtime/lease", server);
 
     lease_buf_t resp = {0};
-    resp.data = malloc(4096);
-    if (!resp.data) { efree(url); return 0; }
+    resp.data = emalloc(4096);
     resp.cap  = 4096;
     resp.data[0] = '\0';
 
@@ -800,8 +797,8 @@ static int mmloader_post_lease(const char *body, const char *build_id,
     MMLOADER_G(has_cached_key)        = 1;
     MMLOADER_G(cached_lease_expires)  = expires_at;
     MMLOADER_G(cached_lease_grace)    = grace_until;
-    if (MMLOADER_G(cached_build_id))  free(MMLOADER_G(cached_build_id));
-    MMLOADER_G(cached_build_id) = build_id ? strdup(build_id) : NULL;
+    if (MMLOADER_G(cached_build_id))  pefree(MMLOADER_G(cached_build_id), 1);
+    MMLOADER_G(cached_build_id) = build_id ? pestrdup(build_id, 1) : NULL;
 
     /* Extract feature set from lease response and store persistently */
     cJSON *j_features = cJSON_GetObjectItemCaseSensitive(json, "features");
@@ -821,7 +818,7 @@ static int mmloader_post_lease(const char *body, const char *build_id,
     ok = 1;
 
 cleanup:
-    free(resp.data);
+    efree(resp.data);
     return ok;
 }
 
@@ -900,7 +897,7 @@ static int mmloader_fetch_lease(const char *build_id, unsigned char *key_out,
     ok = mmloader_post_lease(body, build_id, key_out, server_override);
 
 done:
-    if (body) free(body);
+    if (body) cJSON_free(body);
     if (lic)  cJSON_Delete(lic);
     if (mf)   cJSON_Delete(mf);
     return ok;
@@ -942,8 +939,8 @@ static int mmloader_get_or_fetch_runtime_key(const char *build_id,
             MMLOADER_G(has_cached_key)       = 1;
             MMLOADER_G(cached_lease_expires) = disk_expires;
             MMLOADER_G(cached_lease_grace)   = disk_grace;
-            if (MMLOADER_G(cached_build_id)) free(MMLOADER_G(cached_build_id));
-            MMLOADER_G(cached_build_id) = strdup(build_id);
+            if (MMLOADER_G(cached_build_id)) pefree(MMLOADER_G(cached_build_id), 1);
+            MMLOADER_G(cached_build_id) = pestrdup(build_id, 1);
             ZEND_SECURE_ZERO(disk_key, sizeof(disk_key));
             php_error_docref(NULL, E_NOTICE,
                 "MMENC: using offline cached lease for build %s (grace period active)", build_id);
@@ -1420,7 +1417,7 @@ PHP_MSHUTDOWN_FUNCTION(mmloader)
                      sizeof(MMLOADER_G(cached_runtime_key)));
     MMLOADER_G(has_cached_key) = 0;
     if (MMLOADER_G(cached_build_id)) {
-        free(MMLOADER_G(cached_build_id));
+        pefree(MMLOADER_G(cached_build_id), 1);
         MMLOADER_G(cached_build_id) = NULL;
     }
 
